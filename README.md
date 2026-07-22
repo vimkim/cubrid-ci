@@ -96,3 +96,15 @@ cargo build
 cargo test
 cargo clippy --all-targets --all-features -- -D warnings
 ```
+
+The root `justfile` provides shorter commands for everyday work:
+
+```sh
+just                 # list available recipes
+just build           # debug build
+just run -- --help   # run cubrid-ci with arguments
+just test            # run all tests
+just release         # optimized, locked build
+just install         # install from this checkout
+just verify          # formatting, check, tests, and strict Clippy
+```
