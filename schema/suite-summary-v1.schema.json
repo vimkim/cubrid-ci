@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/suite-summary-v1.schema.json",
+  "title": "CUBRID CI suite summary v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "suite",
+    "repository",
+    "pr_number",
+    "pr_url",
+    "commit",
+    "short_sha",
+    "github_status_context",
+    "github_status_state",
+    "github_status_url",
+    "circleci_job_number",
+    "circleci_job_status",
+    "circleci_job_url",
+    "circleci_job_api",
+    "circleci_tests_api",
+    "failed_node_indexes",
+    "test_count",
+    "result_counts",
+    "success_count",
+    "failure_count",
+    "skipped_count",
+    "error_count",
+    "unknown_count",
+    "test_durations",
+    "artifact_count",
+    "downloaded_artifact_count",
+    "downloaded_artifact_bytes",
+    "prerequisites"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+    "repository": { "const": "CUBRID/cubrid" },
+    "pr_number": { "type": "integer", "minimum": 1 },
+    "pr_url": { "type": "string", "format": "uri" },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "short_sha": { "type": "string", "pattern": "^[0-9a-f]{7}$" },
+    "github_status_context": { "type": "string" },
+    "github_status_state": { "type": "string" },
+    "github_status_url": { "type": "string", "format": "uri" },
+    "circleci_job_number": { "type": "integer", "minimum": 1 },
+    "circleci_job_status": { "type": "string" },
+    "circleci_job_url": { "type": "string", "format": "uri" },
+    "circleci_job_api": { "type": "string", "format": "uri" },
+    "circleci_tests_api": { "type": "string", "format": "uri" },
+    "queued_at": { "type": ["string", "null"], "format": "date-time" },
+    "started_at": { "type": ["string", "null"], "format": "date-time" },
+    "stopped_at": { "type": ["string", "null"], "format": "date-time" },
+    "queue_duration_seconds": { "type": ["number", "null"], "minimum": 0 },
+    "wall_duration_seconds": { "type": ["number", "null"], "minimum": 0 },
+    "parallelism": { "type": ["integer", "null"], "minimum": 1 },
+    "failed_node_indexes": {
+      "type": "array",
+      "items": { "type": "integer", "minimum": 0 },
+      "uniqueItems": true
+    },
+    "test_count": { "type": "integer", "minimum": 0 },
+    "result_counts": {
+      "type": "object",
+      "additionalProperties": { "type": "integer", "minimum": 0 }
+    },
+    "success_count": { "type": "integer", "minimum": 0 },
+    "failure_count": { "type": "integer", "minimum": 0 },
+    "skipped_count": { "type": "integer", "minimum": 0 },
+    "error_count": { "type": "integer", "minimum": 0 },
+    "unknown_count": { "type": "integer", "minimum": 0 },
+    "test_durations": {
+      "type": "object",
+      "required": [
+        "count",
+        "total_seconds",
+        "min_seconds",
+        "median_seconds",
+        "p95_seconds",
+        "max_seconds",
+        "slowest"
+      ],
+      "properties": {
+        "count": { "type": "integer", "minimum": 0 },
+        "total_seconds": { "type": "number", "minimum": 0 },
+        "min_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "median_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "p95_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "max_seconds": { "type": ["number", "null"], "minimum": 0 },
+        "slowest": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["name", "seconds"],
+            "properties": {
+              "name": { "type": "string" },
+              "seconds": { "type": "number", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "artifact_count": { "type": "integer", "minimum": 0 },
+    "downloaded_artifact_count": { "type": "integer", "minimum": 0 },
+    "downloaded_artifact_bytes": { "type": "integer", "minimum": 0 },
+    "prerequisites": { "type": "object" },
+    "testcase_revision": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    }
+  },
+  "additionalProperties": false
+}
+

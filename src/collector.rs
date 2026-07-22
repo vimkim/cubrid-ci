@@ -12,7 +12,7 @@ use crate::circleci::CircleCiClient;
 use crate::cli::{ArtifactMode, Cli};
 use crate::diff::{extract_diff, node_index, stable_test_id};
 use crate::error::AppError;
-use crate::github::{GitHubClient, extract_ticket, parse_circleci_job_number, parse_pr_url};
+use crate::github::{GitHubClient, directory_identity, parse_circleci_job_number, parse_pr_url};
 use crate::model::{
     CommandResult, CommitManifest, CommitStatus, FailureMetadata, PullRequest, RepositoryRef,
     StatusMap, Suite, SuiteManifest, SuiteState, SuiteSummary, TestCase,
@@ -130,8 +130,7 @@ impl Collector {
             .resolve_commit(&repo, &pull, self.config.requested_commit.as_deref())
             .await?;
         let short_sha = commit[..7].to_owned();
-        let directory_identity =
-            extract_ticket(&pull).unwrap_or_else(|| format!("PR-{}", repo.pr_number));
+        let directory_identity = directory_identity(&pull);
         let storage = Storage::new(
             &self.config.data_dir,
             directory_identity.clone(),

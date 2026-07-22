@@ -12,7 +12,7 @@ async fn main() -> ExitCode {
     let config = match CollectorConfig::from_cli(&cli) {
         Ok(config) => config,
         Err(error) => {
-            eprintln!("error: {error}");
+            emit_error(&cli, &error);
             return ExitCode::from(error.exit_code());
         }
     };
@@ -34,27 +34,31 @@ async fn main() -> ExitCode {
                 ExitCode::SUCCESS
             }
             Err(error) => {
-                if cli.json {
-                    let json = serde_json::json!({
-                        "ok": false,
-                        "kind": error.kind().as_str(),
-                        "error": error.to_string(),
-                        "exit_code": error.exit_code(),
-                    });
-                    println!(
-                        "{}",
-                        serde_json::to_string_pretty(&json).unwrap_or_default()
-                    );
-                } else {
-                    eprintln!("error: {error}");
-                }
+                emit_error(&cli, &error);
                 ExitCode::from(error.exit_code())
             }
         },
         Err(error) => {
-            eprintln!("error: {error}");
+            emit_error(&cli, &error);
             ExitCode::from(error.exit_code())
         }
+    }
+}
+
+fn emit_error(cli: &Cli, error: &cubrid_circleci_analyzer::AppError) {
+    if cli.json {
+        let json = serde_json::json!({
+            "ok": false,
+            "kind": error.kind().as_str(),
+            "error": error.to_string(),
+            "exit_code": error.exit_code(),
+        });
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&json).unwrap_or_else(|_| "{}".to_owned())
+        );
+    } else {
+        eprintln!("error: {error}");
     }
 }
 

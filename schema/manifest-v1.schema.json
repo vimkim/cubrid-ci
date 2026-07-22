@@ -1,0 +1,97 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/manifest-v1.schema.json",
+  "title": "CUBRID CI commit manifest v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "tool_version",
+    "repository",
+    "pr_number",
+    "pr_url",
+    "pr_title",
+    "head_branch",
+    "base_branch",
+    "resolved_commit",
+    "short_sha",
+    "directory_identity",
+    "collected_at",
+    "prerequisites",
+    "suites"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "tool_version": { "type": "string" },
+    "repository": { "const": "CUBRID/cubrid" },
+    "pr_number": { "type": "integer", "minimum": 1 },
+    "pr_url": { "type": "string", "format": "uri" },
+    "pr_title": { "type": "string" },
+    "head_branch": { "type": "string" },
+    "base_branch": { "type": "string" },
+    "requested_commit": { "type": ["string", "null"] },
+    "resolved_commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "short_sha": { "type": "string", "pattern": "^[0-9a-f]{7}$" },
+    "directory_identity": {
+      "type": "string",
+      "pattern": "^(CBRD-[0-9]+|PR-[0-9]+)$"
+    },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "prerequisites": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/nullableStatus" }
+    },
+    "suites": {
+      "type": "object",
+      "required": ["test_medium", "test_sql", "test_shell"],
+      "properties": {
+        "test_medium": { "$ref": "#/$defs/suite" },
+        "test_sql": { "$ref": "#/$defs/suite" },
+        "test_shell": { "$ref": "#/$defs/suite" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "$defs": {
+    "nullableStatus": {
+      "anyOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["context", "state", "created_at", "updated_at"],
+          "properties": {
+            "context": { "type": "string" },
+            "state": { "type": "string" },
+            "target_url": { "type": ["string", "null"] },
+            "description": { "type": ["string", "null"] },
+            "created_at": { "type": "string", "format": "date-time" },
+            "updated_at": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "suite": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": {
+          "enum": [
+            "missing",
+            "pending",
+            "build_failed",
+            "completed",
+            "collection_failed",
+            "timed_out"
+          ]
+        },
+        "circleci_job_number": { "type": "integer", "minimum": 1 },
+        "status_state": { "type": "string" },
+        "status_url": { "type": "string" },
+        "diagnostic": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}
+

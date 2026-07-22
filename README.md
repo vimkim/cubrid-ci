@@ -86,7 +86,8 @@ successfully collected failed suite exits with code 0.
 | 5 | Remote API, authentication, or rate-limit failure |
 | 6 | Local storage, schema, or normalization failure |
 
-See [PLAN.md](PLAN.md) for the complete storage and verification contracts.
+See [PLAN.md](PLAN.md) for the complete storage and verification contracts and
+[schema/](schema/) for the versioned normalized JSON schemas.
 
 ## Development
 

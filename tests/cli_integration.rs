@@ -1,11 +1,29 @@
 use std::path::Path;
 use std::process::Command;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path, query_param};
-use wiremock::{Mock, MockServer, ResponseTemplate};
+use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 
 const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+
+#[test]
+fn json_mode_reports_configuration_errors_as_json() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+        .arg("--json")
+        .arg("test-sql")
+        .arg("https://github.com/CUBRID/cubrid/pull/6864")
+        .arg("--download-concurrency")
+        .arg("0")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["kind"], "input");
+    assert_eq!(error["exit_code"], 2);
+}
 
 #[tokio::test(flavor = "multi_thread")]
 async fn failed_suite_is_collected_as_successful_evidence() {
@@ -67,6 +85,14 @@ async fn failed_suite_is_collected_as_successful_evidence() {
         std::fs::read_to_string(failure_dir.join("diff.txt"))
             .unwrap()
             .contains("--- answer")
+    );
+    validate_schema(
+        include_str!("../schema/suite-summary-v1.schema.json"),
+        &std::fs::read(suite.join("summary.json")).unwrap(),
+    );
+    validate_schema(
+        include_str!("../schema/manifest-v1.schema.json"),
+        &std::fs::read(output_root.path().join("CBRD-26357/aaaaaaa/manifest.json")).unwrap(),
     );
 }
 
@@ -131,7 +157,131 @@ async fn mismatched_circleci_revision_is_rejected_without_suite_output() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_polls_pending_status_until_terminal_result() {
+    let server = MockServer::start().await;
+    mount_pull(&server).await;
+    let calls = Arc::new(AtomicUsize::new(0));
+    Mock::given(method("GET"))
+        .and(path(format!("/repos/CUBRID/cubrid/commits/{SHA}/statuses")))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(SequencedStatuses {
+            calls: calls.clone(),
+        })
+        .mount(&server)
+        .await;
+    mount_job(&server, SHA, "test_sql", 42).await;
+    Mock::given(method("GET"))
+        .and(path("/project/github/CUBRID/cubrid/42/tests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"tests": []})))
+        .mount(&server)
+        .await;
+    mount_artifacts(&server, 42).await;
+
+    let output_root = tempfile::tempdir().unwrap();
+    let output = run_cli(
+        &server,
+        output_root.path(),
+        &["--wait", "--poll-interval", "10ms", "--timeout", "1s"],
+    );
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(calls.load(Ordering::SeqCst) >= 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_build_is_reported_without_publishing_suite_evidence() {
+    let server = MockServer::start().await;
+    mount_pull(&server).await;
+    mount_statuses(
+        &server,
+        vec![
+            status("build", "failure", 40),
+            status("build_debug", "success", 41),
+        ],
+    )
+    .await;
+    let output_root = tempfile::tempdir().unwrap();
+    let output = run_cli(&server, output_root.path(), &[]);
+    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(
+        std::fs::read_dir(output_root.path().join("CBRD-26357/aaaaaaa/test_sql"))
+            .unwrap()
+            .count(),
+        0
+    );
+    let manifest: Value = serde_json::from_slice(
+        &std::fs::read(output_root.path().join("CBRD-26357/aaaaaaa/manifest.json")).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(manifest["suites"]["test_sql"]["state"], "build_failed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn abbreviated_commit_not_associated_with_pr_is_rejected() {
+    let server = MockServer::start().await;
+    mount_pull(&server).await;
+    let unrelated = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+    Mock::given(method("GET"))
+        .and(path("/repos/CUBRID/cubrid/commits/bbbbbbb"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"sha": unrelated})))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "/repos/CUBRID/cubrid/commits/{unrelated}/pulls"
+        )))
+        .and(query_param("per_page", "100"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/repos/CUBRID/cubrid/pulls/6864/commits"))
+        .and(query_param("per_page", "100"))
+        .and(query_param("page", "1"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
+        .mount(&server)
+        .await;
+
+    let output_root = tempfile::tempdir().unwrap();
+    let mut command = base_command(&server, output_root.path());
+    let output = command
+        .arg("bbbbbbb")
+        .arg("--artifact-mode")
+        .arg("manifest")
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(!output_root.path().join("CBRD-26357").exists());
+}
+
+struct SequencedStatuses {
+    calls: Arc<AtomicUsize>,
+}
+
+impl Respond for SequencedStatuses {
+    fn respond(&self, _request: &Request) -> ResponseTemplate {
+        let call = self.calls.fetch_add(1, Ordering::SeqCst);
+        let state = if call == 0 { "pending" } else { "failure" };
+        ResponseTemplate::new(200).set_body_json(vec![
+            status("build", "success", 40),
+            status("build_debug", "success", 41),
+            status("test_sql", state, 42),
+        ])
+    }
+}
+
 fn run_cli(server: &MockServer, data_dir: &Path, extra: &[&str]) -> std::process::Output {
+    let mut command = base_command(server, data_dir);
+    command.arg("--artifact-mode").arg("manifest").args(extra);
+    command.output().unwrap()
+}
+
+fn base_command(server: &MockServer, data_dir: &Path) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"));
     command
         .arg("--json")
@@ -142,11 +292,8 @@ fn run_cli(server: &MockServer, data_dir: &Path, extra: &[&str]) -> std::process
         .arg("test-sql")
         .arg("https://github.com/CUBRID/cubrid/pull/6864")
         .arg("--data-dir")
-        .arg(data_dir)
-        .arg("--artifact-mode")
-        .arg("manifest")
-        .args(extra);
-    command.output().unwrap()
+        .arg(data_dir);
+    command
 }
 
 async fn mount_pull(server: &MockServer) {
@@ -215,4 +362,13 @@ async fn mount_artifacts(server: &MockServer, build_number: u64) {
         .respond_with(ResponseTemplate::new(200).set_body_json(json!([])))
         .mount(server)
         .await;
+}
+
+fn validate_schema(schema: &str, instance: &[u8]) {
+    let schema: Value = serde_json::from_str(schema).unwrap();
+    let instance: Value = serde_json::from_slice(instance).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    if let Err(error) = validator.validate(&instance) {
+        panic!("schema validation failed: {error}");
+    }
 }

@@ -5,6 +5,7 @@ pub mod collector;
 pub mod diff;
 pub mod error;
 pub mod github;
+pub mod http;
 pub mod model;
 pub mod stats;
 pub mod storage;

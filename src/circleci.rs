@@ -4,6 +4,7 @@ use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 use crate::error::AppError;
+use crate::http::send_with_retry;
 use crate::model::{
     CircleArtifact, CircleJob, CircleTestsResponse, RepositoryRef, Suite, TestCase,
 };
@@ -125,12 +126,7 @@ impl CircleCiClient {
     }
 
     async fn get_json<T: DeserializeOwned>(&self, endpoint: &str) -> Result<Fetched<T>, AppError> {
-        let response = self
-            .client
-            .get(endpoint)
-            .send()
-            .await
-            .map_err(|error| AppError::Remote(format!("GET {endpoint}: {error}")))?;
+        let response = send_with_retry(self.client.get(endpoint), "CircleCI", endpoint).await?;
         let status = response.status();
         let bytes = response
             .bytes()

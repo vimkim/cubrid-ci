@@ -10,6 +10,7 @@ use tokio::io::AsyncWriteExt;
 
 use crate::cli::ArtifactMode;
 use crate::error::AppError;
+use crate::http::send_with_retry;
 use crate::model::{ArtifactRecord, CircleArtifact, CircleJob, TestCase};
 use crate::storage::{safe_relative_path, write_json_atomic, write_string_atomic};
 
@@ -332,13 +333,11 @@ async fn download_url(
     if let Some(token) = bearer_token {
         request = request.bearer_auth(token);
     }
-    let response = request
-        .send()
-        .await
-        .map_err(|error| AppError::Remote(format!("GET {url}: {error}")))?;
+    let display_url = redact_url(url);
+    let response = send_with_retry(request, "artifact", &display_url).await?;
     if !response.status().is_success() {
         return Err(AppError::Remote(format!(
-            "GET {url} returned {}",
+            "GET {display_url} returned {}",
             response.status()
         )));
     }
@@ -347,7 +346,7 @@ async fn download_url(
         .is_some_and(|length| length > max_bytes)
     {
         return Err(AppError::Remote(format!(
-            "download exceeds configured limit of {max_bytes} bytes: {url}"
+            "download exceeds configured limit of {max_bytes} bytes: {display_url}"
         )));
     }
 
@@ -373,35 +372,59 @@ async fn download_url(
     let mut stream = response.bytes_stream();
     let mut size = 0_u64;
     let mut hasher = Sha256::new();
-    while let Some(chunk) = stream
-        .try_next()
-        .await
-        .map_err(|error| AppError::Remote(format!("read {url}: {error}")))?
-    {
+    loop {
+        let next = match stream.try_next().await {
+            Ok(next) => next,
+            Err(error) => {
+                drop(file);
+                let _ = tokio::fs::remove_file(&temporary).await;
+                return Err(AppError::Remote(format!("read {display_url}: {error}")));
+            }
+        };
+        let Some(chunk) = next else {
+            break;
+        };
         size += chunk.len() as u64;
         if size > max_bytes {
             drop(file);
             let _ = tokio::fs::remove_file(&temporary).await;
             return Err(AppError::Remote(format!(
-                "download exceeded configured limit of {max_bytes} bytes: {url}"
+                "download exceeded configured limit of {max_bytes} bytes: {display_url}"
             )));
         }
         hasher.update(&chunk);
-        file.write_all(&chunk)
-            .await
-            .map_err(|source| AppError::storage(&temporary, source))?;
+        if let Err(source) = file.write_all(&chunk).await {
+            drop(file);
+            let _ = tokio::fs::remove_file(&temporary).await;
+            return Err(AppError::storage(&temporary, source));
+        }
     }
-    file.sync_all()
-        .await
-        .map_err(|source| AppError::storage(&temporary, source))?;
+    if let Err(source) = file.sync_all().await {
+        drop(file);
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(AppError::storage(&temporary, source));
+    }
     drop(file);
-    tokio::fs::rename(&temporary, destination)
-        .await
-        .map_err(|source| AppError::storage(destination, source))?;
+    if let Err(source) = tokio::fs::rename(&temporary, destination).await {
+        let _ = tokio::fs::remove_file(&temporary).await;
+        return Err(AppError::storage(destination, source));
+    }
     Ok(DownloadedFile {
         size_bytes: size,
         sha256: hex::encode(hasher.finalize()),
     })
+}
+
+fn redact_url(input: &str) -> String {
+    match url::Url::parse(input) {
+        Ok(mut url) => {
+            if url.query().is_some() {
+                url.set_query(Some("redacted"));
+            }
+            url.to_string()
+        }
+        Err(_) => "<invalid-url>".to_owned(),
+    }
 }
 
 fn is_text_artifact(path: &str) -> bool {
@@ -477,6 +500,14 @@ mod tests {
         assert_eq!(decode_circle_output(input), "one\ntwo\n");
     }
 
+    #[test]
+    fn redacts_signed_query_parameters_from_diagnostics() {
+        assert_eq!(
+            redact_url("https://example.test/log?token=secret&other=value"),
+            "https://example.test/log?redacted"
+        );
+    }
+
     #[tokio::test]
     async fn streams_text_artifacts_to_safe_node_scoped_paths() {
         let server = MockServer::start().await;
@@ -486,13 +517,7 @@ mod tests {
             .mount(&server)
             .await;
         let root = tempfile::tempdir().unwrap();
-        let downloader = ArtifactDownloader::new(
-            Client::new(),
-            ArtifactMode::Text,
-            1_024,
-            2,
-            None,
-        );
+        let downloader = ArtifactDownloader::new(Client::new(), ArtifactMode::Text, 1_024, 2, None);
         let records = downloader
             .download_artifacts(
                 &[CircleArtifact {
@@ -527,8 +552,7 @@ mod tests {
             .mount(&server)
             .await;
         let root = tempfile::tempdir().unwrap();
-        let downloader =
-            ArtifactDownloader::new(Client::new(), ArtifactMode::All, 4, 1, None);
+        let downloader = ArtifactDownloader::new(Client::new(), ArtifactMode::All, 4, 1, None);
         let records = downloader
             .download_artifacts(
                 &[CircleArtifact {
@@ -541,12 +565,6 @@ mod tests {
             )
             .await;
         assert!(!records[0].downloaded);
-        assert!(
-            records[0]
-                .diagnostic
-                .as_deref()
-                .unwrap()
-                .contains("limit")
-        );
+        assert!(records[0].diagnostic.as_deref().unwrap().contains("limit"));
     }
 }

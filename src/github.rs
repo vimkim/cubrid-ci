@@ -2,10 +2,12 @@ use std::collections::HashMap;
 
 use regex::Regex;
 use reqwest::{Client, StatusCode};
+use serde::Deserialize;
 use serde::de::DeserializeOwned;
 use url::Url;
 
 use crate::error::AppError;
+use crate::http::send_with_retry;
 use crate::model::{CommitStatus, GitCommit, PullRequest, RepositoryRef, StatusMap, Suite};
 
 const EXPECTED_OWNER: &str = "CUBRID";
@@ -152,6 +154,16 @@ impl GitHubClient {
         pr_number: u64,
         sha: &str,
     ) -> Result<bool, AppError> {
+        let associated: Vec<PullAssociation> = self
+            .get_json(&format!(
+                "/repos/{}/{}/commits/{sha}/pulls?per_page=100",
+                repo.owner, repo.name
+            ))
+            .await?;
+        if associated.iter().any(|pull| pull.number == pr_number) {
+            return Ok(true);
+        }
+
         for page in 1..=100 {
             let commits: Vec<GitCommit> = self
                 .get_json(&format!(
@@ -184,10 +196,7 @@ impl GitHubClient {
         if let Some(token) = &self.token {
             request = request.bearer_auth(token);
         }
-        let response = request
-            .send()
-            .await
-            .map_err(|error| AppError::Remote(format!("GET {endpoint}: {error}")))?;
+        let response = send_with_retry(request, "GitHub", &endpoint).await?;
         let status = response.status();
         let bytes = response
             .bytes()
@@ -198,6 +207,11 @@ impl GitHubClient {
         }
         serde_json::from_slice(&bytes).map_err(|source| AppError::Json { endpoint, source })
     }
+}
+
+#[derive(Debug, Deserialize)]
+struct PullAssociation {
+    number: u64,
 }
 
 pub fn parse_pr_url(input: &str) -> Result<RepositoryRef, AppError> {
@@ -263,6 +277,10 @@ pub fn extract_ticket(pull: &PullRequest) -> Option<String> {
     ]
     .into_iter()
     .find_map(|text| pattern.find(text).map(|m| m.as_str().to_ascii_uppercase()))
+}
+
+pub fn directory_identity(pull: &PullRequest) -> String {
+    extract_ticket(pull).unwrap_or_else(|| format!("PR-{}", pull.number))
 }
 
 fn validate_full_sha(sha: &str) -> Result<(), AppError> {
@@ -357,5 +375,25 @@ mod tests {
             },
         };
         assert_eq!(extract_ticket(&pull).as_deref(), Some("CBRD-123"));
+    }
+
+    #[test]
+    fn falls_back_to_pr_number_without_ticket() {
+        let pull = PullRequest {
+            number: 6864,
+            title: "tracking PR".to_owned(),
+            body: None,
+            html_url: String::new(),
+            state: "open".to_owned(),
+            head: crate::model::PullRef {
+                ref_name: "feature".to_owned(),
+                sha: "a".repeat(40),
+            },
+            base: crate::model::PullRef {
+                ref_name: "develop".to_owned(),
+                sha: "b".repeat(40),
+            },
+        };
+        assert_eq!(directory_identity(&pull), "PR-6864");
     }
 }

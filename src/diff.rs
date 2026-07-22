@@ -73,6 +73,8 @@ pub fn extract_diff(message: &str) -> Option<String> {
         .filter(|line| {
             let lower = line.to_ascii_lowercase();
             lower.contains("nok timeout")
+                || lower.contains(": nok")
+                || lower.contains("nok case")
                 || lower.contains("assert")
                 || lower.contains("core dump")
                 || lower.contains("coredump")
