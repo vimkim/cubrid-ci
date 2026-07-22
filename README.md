@@ -11,23 +11,58 @@ job name, and build number before publishing output.
 
 ## Build and install
 
-Rust 1.85 or newer is required.
+The development MSRV is Rust 1.85. Verified releases use the exact Rust 1.89.0
+toolchain pinned by `rust-toolchain.toml`.
 
 ```sh
-cargo build --release
-cargo install --path . --locked
+cargo build                         # development/debug binary
+./scripts/build-release.sh          # verified release binary
 ```
 
 The executable is named `cubrid-ci`.
 
-`cubrid-ci --version` reports the Cargo package version and the source commit,
-for example `cubrid-ci 0.1.0 (dd5dd66e8e90)`. The same value is saved as
-`tool_version` in each commit manifest. Builds made outside a Git checkout can
-provide the commit explicitly:
+`cubrid-ci --version` reports the Cargo package version, source commit, and
+build class, for example:
+
+```text
+cubrid-ci 0.1.0 (dd5dd66e8e90, debug)
+cubrid-ci 0.1.0 (dd5dd66e8e90, release)
+```
+
+The same value is saved as `tool_version` in each commit manifest. Debug builds
+made outside a Git checkout can provide `CUBRID_CI_BUILD_GIT_SHA` explicitly.
+Release builds require a Git checkout and must use the exact `HEAD` commit.
+
+### Release guarantees
+
+`scripts/build-release.sh` is the canonical release entry point. It rejects
+staged, unstaged, untracked, and dirty-submodule changes; builds with the pinned
+Rust toolchain, target triple, `Cargo.lock`, deterministic source timestamp, and
+remapped checkout path; and checks the tree again after compilation. A supplied
+`CUBRID_CI_BUILD_GIT_SHA` must exactly equal `HEAD`.
+
+Successful output is written to:
+
+```text
+target/x86_64-unknown-linux-gnu/release/cubrid-ci
+target/x86_64-unknown-linux-gnu/release/cubrid-ci.build-info
+```
+
+The build-info receipt records the full Git SHA, toolchain, target, binary
+version, and SHA-256. The source-tree checks are also enforced from `build.rs`
+when Cargo actually compiles the release package. Use the wrapper for releases
+because Cargo may otherwise reuse an existing artifact without rerunning the
+build script.
+
+To test byte-for-byte reproducibility, build the same clean commit in two
+independent clones and compare the resulting hashes:
 
 ```sh
-CUBRID_CI_BUILD_GIT_SHA=dd5dd66e8e90f521f7524ab84644fe2e44bbe58a cargo build --release --locked
+./scripts/verify-release-reproducibility.sh
 ```
+
+This verifies the pinned local release environment. Reproduction on a different
+operating system or linker requires an equivalently pinned build image.
 
 ## Usage
 
@@ -113,7 +148,8 @@ just                 # list available recipes
 just build           # debug build
 just run --help      # run cubrid-ci with arguments
 just test            # run all tests
-just release         # optimized, locked build
+just release         # clean, pinned, reproducible release build
+just verify-release-reproducible
 just install         # install from this checkout
 just verify          # formatting, check, tests, and strict Clippy
 ```

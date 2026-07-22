@@ -23,6 +23,7 @@ fn version_reports_package_and_build_commit() {
             cubrid_circleci_analyzer::build_info::VERSION
         )
     );
+    assert!(cubrid_circleci_analyzer::build_info::VERSION.ends_with(", debug)"));
 }
 
 #[test]

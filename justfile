@@ -14,7 +14,11 @@ build:
 
 # Build the optimized release binary.
 release:
-    cargo build --release --locked
+    ./scripts/build-release.sh
+
+# Build the release twice in independent clones and compare binary hashes.
+verify-release-reproducible:
+    ./scripts/verify-release-reproducibility.sh
 
 # Run cubrid-ci, passing any remaining arguments to the CLI.
 run *args:
