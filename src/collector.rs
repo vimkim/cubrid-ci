@@ -96,7 +96,7 @@ impl Collector {
         let http = Client::builder()
             .user_agent(format!(
                 "cubrid-circleci-analyzer/{}",
-                env!("CARGO_PKG_VERSION")
+                crate::build_info::VERSION
             ))
             .connect_timeout(Duration::from_secs(20))
             .timeout(Duration::from_secs(600))
@@ -475,7 +475,7 @@ impl Collector {
         }
         CommitManifest {
             schema_version: 1,
-            tool_version: env!("CARGO_PKG_VERSION").to_owned(),
+            tool_version: crate::build_info::VERSION.to_owned(),
             repository: repo.slug(),
             pr_number: repo.pr_number,
             pr_url: pull.html_url.clone(),

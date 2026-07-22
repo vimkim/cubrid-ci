@@ -10,6 +10,22 @@ use wiremock::{Mock, MockServer, Request, Respond, ResponseTemplate};
 const SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[test]
+fn version_reports_package_and_build_commit() {
+    let output = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+        .arg("--version")
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!(
+            "cubrid-ci {}\n",
+            cubrid_circleci_analyzer::build_info::VERSION
+        )
+    );
+}
+
+#[test]
 fn json_mode_reports_configuration_errors_as_json() {
     let output = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
         .arg("--json")

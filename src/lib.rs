@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod build_info;
 pub mod circleci;
 pub mod cli;
 pub mod collector;

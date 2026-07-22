@@ -9,7 +9,7 @@ use crate::model::Suite;
 #[derive(Debug, Parser)]
 #[command(
     name = "cubrid-ci",
-    version,
+    version = crate::build_info::VERSION,
     about = "Fetch exact-commit CUBRID CircleCI failure evidence",
     propagate_version = true,
     subcommand_required = true,

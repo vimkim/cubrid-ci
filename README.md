@@ -20,6 +20,15 @@ cargo install --path . --locked
 
 The executable is named `cubrid-ci`.
 
+`cubrid-ci --version` reports the Cargo package version and the source commit,
+for example `cubrid-ci 0.1.0 (dd5dd66e8e90)`. The same value is saved as
+`tool_version` in each commit manifest. Builds made outside a Git checkout can
+provide the commit explicitly:
+
+```sh
+CUBRID_CI_BUILD_GIT_SHA=dd5dd66e8e90f521f7524ab84644fe2e44bbe58a cargo build --release --locked
+```
+
 ## Usage
 
 ```sh
@@ -102,7 +111,7 @@ The root `justfile` provides shorter commands for everyday work:
 ```sh
 just                 # list available recipes
 just build           # debug build
-just run -- --help   # run cubrid-ci with arguments
+just run --help      # run cubrid-ci with arguments
 just test            # run all tests
 just release         # optimized, locked build
 just install         # install from this checkout
