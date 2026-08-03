@@ -238,9 +238,8 @@ links them back to the failed actions and test failures where possible.
 
 Always fetch the artifact manifest. Artifact download modes are:
 
-- `manifest`: metadata and URLs only;
-- `text`: recommended default; logs, XML, text, properties, and other bounded
-  textual diagnostics;
+- `manifest`: default; metadata and URLs only;
+- `text`: logs, XML, text, properties, and other bounded textual diagnostics;
 - `all`: includes large binary artifacts such as core dumps.
 
 Downloads are streamed, size-limited, checksummed, and written atomically.
@@ -334,7 +333,7 @@ no partial suite output when simulating an unavailable result.
 | Runtime | **Accepted: Rust 1.85+, edition 2024, Clap, Tokio, Reqwest, Serde** | Selected for a single distributable binary, typed state/identity validation, and safe streamed artifact handling |
 | Waiting | One-shot by default; `--wait --timeout 26h` opt-in | Blocking by default is hazardous for the exclusive shell queue |
 | Reruns | Preserve `attempts/<job-number>` and expose newest normalized view | Latest-only is smaller but destroys evidence |
-| Artifacts | `text` default; core dumps opt-in | `all` may consume substantial disk/network unexpectedly |
+| Artifacts | `manifest` default; payload downloads opt-in | `text` downloads bounded textual diagnostics; `all` may consume substantial disk/network unexpectedly |
 | Build gates | Follow actual `build`, `build_debug`, and shell `download-build` contexts | Checking only `build` misrepresents the current workflow |
 | Missing ticket | Fall back to `PR-<number>` | Failing forces manual input and prevents generic use |
 | Test sources | Optional enrichment, non-fatal without private-repo access | Making it mandatory prevents public/unauthenticated collection |

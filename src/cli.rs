@@ -95,7 +95,7 @@ pub struct FetchArgs {
     pub attempt: Option<u64>,
 
     /// Artifact download policy.
-    #[arg(long, value_enum, default_value_t = ArtifactMode::Text)]
+    #[arg(long, value_enum, default_value_t = ArtifactMode::Manifest)]
     pub artifact_mode: ArtifactMode,
 
     /// Maximum downloaded bytes per log or artifact.
@@ -115,9 +115,9 @@ pub struct FetchArgs {
 #[serde(rename_all = "snake_case")]
 pub enum ArtifactMode {
     /// Record artifact metadata but download none.
+    #[default]
     Manifest,
     /// Download bounded textual diagnostics and XML.
-    #[default]
     Text,
     /// Download every bounded artifact, including core dumps.
     All,
@@ -151,6 +151,34 @@ mod tests {
             .unwrap();
             assert_eq!(cli.suite_and_args().0, suite);
             assert_eq!(cli.suite_and_args().1.commit.as_deref(), Some("c2cbeaf"));
+        }
+    }
+
+    #[test]
+    fn defaults_to_manifest_artifact_mode() {
+        let cli = Cli::try_parse_from([
+            "cubrid-ci",
+            "test-shell",
+            "https://github.com/CUBRID/cubrid/pull/6864",
+        ])
+        .unwrap();
+
+        assert_eq!(cli.suite_and_args().1.artifact_mode, ArtifactMode::Manifest);
+    }
+
+    #[test]
+    fn accepts_explicit_artifact_download_modes() {
+        for (value, expected) in [("text", ArtifactMode::Text), ("all", ArtifactMode::All)] {
+            let cli = Cli::try_parse_from([
+                "cubrid-ci",
+                "test-shell",
+                "https://github.com/CUBRID/cubrid/pull/6864",
+                "--artifact-mode",
+                value,
+            ])
+            .unwrap();
+
+            assert_eq!(cli.suite_and_args().1.artifact_mode, expected);
         }
     }
 }

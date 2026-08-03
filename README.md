@@ -88,10 +88,11 @@ Useful options:
 --json
 ```
 
-The default artifact mode is `text`: the manifest and bounded textual
-diagnostics are downloaded, while core dumps require `--artifact-mode all`.
-Failed CircleCI step output is captured in every mode because its signed URL
-can expire.
+The default artifact mode is `manifest`: artifact metadata and URLs are
+recorded without downloading artifact payloads. Failed tests and failed
+CircleCI step output are still captured because step-output URLs can expire.
+Use `--artifact-mode text` to also download bounded textual diagnostics, or
+`--artifact-mode all` to include bounded binary artifacts such as core dumps.
 
 ## Authentication
 

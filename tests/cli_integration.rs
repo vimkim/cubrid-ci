@@ -114,6 +114,117 @@ async fn failed_suite_is_collected_as_successful_evidence() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn default_mode_keeps_failed_tests_and_action_logs_without_artifact_payloads() {
+    let server = MockServer::start().await;
+    mount_pull(&server).await;
+    mount_statuses(
+        &server,
+        vec![
+            status("build", "success", 40),
+            status("build_debug", "success", 41),
+            status("test_sql", "failure", 42),
+        ],
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/project/github/CUBRID/cubrid/42"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "build_num": 42,
+            "status": "failed",
+            "vcs_revision": SHA,
+            "queued_at": "2026-07-22T00:00:00Z",
+            "start_time": "2026-07-22T00:00:02Z",
+            "stop_time": "2026-07-22T00:00:12Z",
+            "build_time_millis": 10000,
+            "parallel": 1,
+            "workflows": {
+                "job_name": "test_sql",
+                "workflow_id": "wf",
+                "workflow_name": "build_test"
+            },
+            "steps": [{
+                "name": "Test",
+                "actions": [{
+                    "index": 0,
+                    "status": "failed",
+                    "failed": true,
+                    "output_url": format!("{}/step-output", server.uri())
+                }]
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/project/github/CUBRID/cubrid/42/tests"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "tests": [{
+                "name": "sql/b.sql",
+                "file": "sql/b.sql",
+                "result": "failure",
+                "message": "unexpected result"
+            }]
+        })))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/project/github/CUBRID/cubrid/42/artifacts"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!([{
+            "path": "tmp/logs/test.log",
+            "url": format!("{}/artifact-payload", server.uri()),
+            "node_index": 0
+        }])))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/step-output"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_json(json!([{"message": "the assertion failed\n"}])),
+        )
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/artifact-payload"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("large artifact"))
+        .mount(&server)
+        .await;
+
+    let output_root = tempfile::tempdir().unwrap();
+    let output = run_cli(&server, output_root.path(), &[]);
+    assert!(
+        output.status.success(),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+
+    let suite = output_root.path().join("CBRD-26357/aaaaaaa/test_sql");
+    assert_eq!(
+        std::fs::read_to_string(suite.join("failed-tc.txt")).unwrap(),
+        "sql/b.sql\n"
+    );
+    assert_eq!(
+        std::fs::read_to_string(suite.join("logs/steps/000-Test/node-0.log")).unwrap(),
+        "the assertion failed\n"
+    );
+    let artifacts: Value =
+        serde_json::from_slice(&std::fs::read(suite.join("artifacts.json")).unwrap()).unwrap();
+    assert_eq!(artifacts[0]["downloaded"], false);
+    assert!(artifacts[0].get("local_path").is_none());
+
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests
+            .iter()
+            .any(|request| request.url.path() == "/step-output")
+    );
+    assert!(
+        requests
+            .iter()
+            .all(|request| request.url.path() != "/artifact-payload")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn pending_suite_exits_unavailable_and_leaves_empty_directory() {
     let server = MockServer::start().await;
     mount_pull(&server).await;
@@ -294,7 +405,7 @@ impl Respond for SequencedStatuses {
 
 fn run_cli(server: &MockServer, data_dir: &Path, extra: &[&str]) -> std::process::Output {
     let mut command = base_command(server, data_dir);
-    command.arg("--artifact-mode").arg("manifest").args(extra);
+    command.args(extra);
     command.output().unwrap()
 }
 
