@@ -94,6 +94,11 @@ CircleCI step output are still captured because step-output URLs can expire.
 Use `--artifact-mode text` to also download bounded textual diagnostics, or
 `--artifact-mode all` to include bounded binary artifacts such as core dumps.
 
+Collection progress is reported as concise `cubrid-ci:` status lines on
+standard error. Standard output remains reserved for the final human summary
+or the single JSON value emitted by `--json`, so it can be redirected or
+parsed independently.
+
 ## Authentication
 
 Public GitHub and current CircleCI v1.1 endpoints work without credentials,

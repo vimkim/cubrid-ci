@@ -117,6 +117,12 @@ impl Collector {
 
     pub async fn run(&self) -> Result<CommandResult, AppError> {
         let repo = parse_pr_url(&self.config.pr_url)?;
+        eprintln!(
+            "cubrid-ci: resolving {}#{} for {}",
+            repo.slug(),
+            repo.pr_number,
+            self.config.suite
+        );
         info!(repository = %repo.slug(), pr = repo.pr_number, suite = %self.config.suite, "resolving pull request");
         let pull = self.github.pull_request(&repo).await?;
         if pull.number != repo.pr_number {
@@ -130,6 +136,7 @@ impl Collector {
             .resolve_commit(&repo, &pull, self.config.requested_commit.as_deref())
             .await?;
         let short_sha = commit[..7].to_owned();
+        eprintln!("cubrid-ci: pinned commit {short_sha}");
         let directory_identity = directory_identity(&pull);
         let storage = Storage::new(
             &self.config.data_dir,
@@ -140,6 +147,10 @@ impl Collector {
 
         let started = Instant::now();
         let (status, latest, mut manifest) = loop {
+            eprintln!(
+                "cubrid-ci: checking GitHub status for {}",
+                self.config.suite
+            );
             let statuses = self.github.statuses(&repo, &commit).await?;
             let latest = GitHubClient::latest_statuses(&statuses);
             let selected = GitHubClient::select_suite_status(
@@ -161,6 +172,10 @@ impl Collector {
                 Err(error) if self.config.wait && started.elapsed() < self.config.timeout => {
                     debug!(error = %error, "requested attempt is not attached yet");
                     storage.write_manifest(&manifest)?;
+                    eprintln!(
+                        "cubrid-ci: requested attempt is not attached; retrying in {}",
+                        humantime::format_duration(self.config.poll_interval)
+                    );
                     tokio::time::sleep(self.config.poll_interval).await;
                     continue;
                 }
@@ -224,6 +239,11 @@ impl Collector {
                     self.config.suite
                 )));
             }
+            eprintln!(
+                "cubrid-ci: {} is pending; retrying in {}",
+                self.config.suite,
+                humantime::format_duration(self.config.poll_interval)
+            );
             tokio::time::sleep(self.config.poll_interval).await;
         };
 
@@ -296,11 +316,16 @@ impl Collector {
             )));
         }
 
+        eprintln!(
+            "cubrid-ci: collecting CircleCI {} job {build_number}",
+            self.config.suite
+        );
         let circle = CircleCiClient::new(
             self.http.clone(),
             self.config.circleci_api.clone(),
             repo.clone(),
         );
+        eprintln!("cubrid-ci: fetching job metadata, tests, and artifact manifest");
         let fetched_job = circle.job(build_number).await?;
         CircleCiClient::validate_job(&fetched_job.value, build_number, commit, self.config.suite)?;
         let (fetched_tests, fetched_artifacts) =
@@ -325,6 +350,12 @@ impl Collector {
             .filter(|test| test.result.eq_ignore_ascii_case("failure"))
             .cloned()
             .collect();
+        eprintln!(
+            "cubrid-ci: tests: total={}, failed={}; artifacts: listed={}",
+            fetched_tests.value.tests.len(),
+            failures.len(),
+            fetched_artifacts.value.len()
+        );
         write_json_atomic(&staging.path().join("failed-tests.json"), &failures)?;
         let failed_names = if failures.is_empty() {
             String::new()
@@ -348,18 +379,62 @@ impl Collector {
             self.config.download_concurrency,
             self.config.github_token.clone(),
         );
-        let _logs = downloader
+        eprintln!("cubrid-ci: downloading failed action logs");
+        let logs = downloader
             .download_failed_action_logs(&fetched_job.value, staging.path())
             .await?;
+        let downloaded_log_count = logs.iter().filter(|log| log.downloaded).count();
+        eprintln!(
+            "cubrid-ci: failed action logs: captured={}, unavailable={}",
+            downloaded_log_count,
+            logs.len() - downloaded_log_count
+        );
+        if self.config.artifact_mode == ArtifactMode::Manifest {
+            eprintln!(
+                "cubrid-ci: artifact payloads: skipped (manifest mode, listed={})",
+                fetched_artifacts.value.len()
+            );
+        } else {
+            let mode = match self.config.artifact_mode {
+                ArtifactMode::Text => "text",
+                ArtifactMode::All => "all",
+                ArtifactMode::Manifest => unreachable!("manifest mode handled above"),
+            };
+            eprintln!("cubrid-ci: downloading artifact payloads in {mode} mode");
+        }
         let artifact_records = downloader
             .download_artifacts(&fetched_artifacts.value, staging.path())
             .await;
         write_json_atomic(&staging.path().join("artifacts.json"), &artifact_records)?;
 
+        if self.config.artifact_mode != ArtifactMode::Manifest {
+            let downloaded_count = artifact_records
+                .iter()
+                .filter(|artifact| artifact.downloaded)
+                .count();
+            let downloaded_bytes: u64 = artifact_records
+                .iter()
+                .filter_map(|artifact| artifact.size_bytes)
+                .sum();
+            eprintln!(
+                "cubrid-ci: artifact payloads: downloaded={downloaded_count}, bytes={downloaded_bytes}"
+            );
+        }
+
         if self.config.include_test_sources {
-            downloader
+            eprintln!("cubrid-ci: downloading referenced testcase sources");
+            let source_records = downloader
                 .download_test_sources(&failures, staging.path())
                 .await?;
+            let downloaded_source_count = source_records
+                .iter()
+                .filter(|source| source.downloaded)
+                .count();
+            eprintln!(
+                "cubrid-ci: testcase sources: downloaded={}, unavailable={}",
+                downloaded_source_count,
+                source_records.len() - downloaded_source_count
+            );
         }
 
         let counts = result_counts(&fetched_tests.value.tests);
@@ -426,7 +501,9 @@ impl Collector {
             testcase_revision: CircleCiClient::testcase_revision(&fetched_tests.value.tests),
         };
         write_json_atomic(&staging.path().join("summary.json"), &summary)?;
+        eprintln!("cubrid-ci: publishing evidence");
         let output_dir = storage.publish_suite(self.config.suite, staging)?;
+        eprintln!("cubrid-ci: published evidence: {}", output_dir.display());
         info!(job = build_number, output = %output_dir.display(), "published validated suite evidence");
         Ok(CommandResult {
             ok: true,

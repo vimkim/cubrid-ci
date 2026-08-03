@@ -196,6 +196,27 @@ async fn default_mode_keeps_failed_tests_and_action_logs_without_artifact_payloa
         "stderr: {}",
         String::from_utf8_lossy(&output.stderr)
     );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["failure_count"], 1);
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    for status_line in [
+        "cubrid-ci: resolving CUBRID/cubrid#6864 for test_sql",
+        "cubrid-ci: pinned commit aaaaaaa",
+        "cubrid-ci: checking GitHub status for test_sql",
+        "cubrid-ci: collecting CircleCI test_sql job 42",
+        "cubrid-ci: fetching job metadata, tests, and artifact manifest",
+        "cubrid-ci: tests: total=1, failed=1; artifacts: listed=1",
+        "cubrid-ci: downloading failed action logs",
+        "cubrid-ci: failed action logs: captured=1, unavailable=0",
+        "cubrid-ci: artifact payloads: skipped (manifest mode, listed=1)",
+        "cubrid-ci: publishing evidence",
+        "cubrid-ci: published evidence:",
+    ] {
+        assert!(
+            stderr.contains(status_line),
+            "missing status line {status_line:?} in stderr:\n{stderr}"
+        );
+    }
 
     let suite = output_root.path().join("CBRD-26357/aaaaaaa/test_sql");
     assert_eq!(
