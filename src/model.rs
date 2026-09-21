@@ -3,17 +3,21 @@ use std::fmt;
 use std::path::PathBuf;
 
 use chrono::{DateTime, Utc};
+use clap::ValueEnum;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, ValueEnum)]
 #[serde(rename_all = "snake_case")]
 pub enum Suite {
     #[serde(rename = "test_medium")]
+    #[value(name = "test_medium")]
     Medium,
     #[serde(rename = "test_sql")]
+    #[value(name = "test_sql")]
     Sql,
     #[serde(rename = "test_shell")]
+    #[value(name = "test_shell")]
     Shell,
 }
 

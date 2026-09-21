@@ -7,6 +7,7 @@ pub mod config;
 pub mod diff;
 pub mod doctor;
 pub mod error;
+pub mod gha_collect;
 pub mod github;
 pub mod http;
 pub mod model;

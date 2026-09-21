@@ -45,6 +45,29 @@ async fn main() -> ExitCode {
         };
     }
 
+    if let Commands::Collect(args) = &cli.command {
+        return match cubrid_circleci_analyzer::gha_collect::run(args) {
+            Ok(result) => {
+                if cli.json {
+                    match serde_json::to_string_pretty(&result) {
+                        Ok(json) => println!("{json}"),
+                        Err(error) => {
+                            eprintln!("error: failed to serialize command result: {error}");
+                            return ExitCode::from(6);
+                        }
+                    }
+                } else {
+                    println!("{}", result.human_summary());
+                }
+                ExitCode::from(result.exit_code())
+            }
+            Err(error) => {
+                emit_error(&cli, &error);
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
+
     let config = match CollectorConfig::from_cli(&cli) {
         Ok(config) => config,
         Err(error) => {

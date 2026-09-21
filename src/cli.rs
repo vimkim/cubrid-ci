@@ -10,7 +10,7 @@ use crate::model::Suite;
 #[command(
     name = "cubrid-ci",
     version = crate::build_info::VERSION,
-    about = "Fetch exact-commit CUBRID CircleCI failure evidence",
+    about = "Inspect and collect exact-commit CUBRID CI evidence",
     propagate_version = true,
     subcommand_required = true,
     arg_required_else_help = true
@@ -49,7 +49,7 @@ pub struct Cli {
 impl Cli {
     pub fn suite_and_args(&self) -> Option<(Suite, &FetchArgs)> {
         match &self.command {
-            Commands::Status(_) | Commands::Doctor(_) => None,
+            Commands::Status(_) | Commands::Doctor(_) | Commands::Collect(_) => None,
             Commands::TestMedium(args) => Some((Suite::Medium, args)),
             Commands::TestSql(args) => Some((Suite::Sql, args)),
             Commands::TestShell(args) => Some((Suite::Shell, args)),
@@ -63,12 +63,36 @@ pub enum Commands {
     Status(StatusArgs),
     /// Check dependencies and local collection configuration.
     Doctor(DoctorArgs),
+    /// Collect exact-commit GitHub Actions evidence.
+    Collect(CollectArgs),
     /// Fetch the test_medium result.
     TestMedium(FetchArgs),
     /// Fetch the test_sql result.
     TestSql(FetchArgs),
     /// Fetch the test_shell result.
     TestShell(FetchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CollectArgs {
+    /// CUBRID pull-request number or URL; otherwise detect from the current directory.
+    pub pr: Option<String>,
+
+    /// Exact 40-character commit SHA; required when PR is explicit.
+    #[arg(long)]
+    pub commit: Option<String>,
+
+    /// Suite to collect; repeat to select a subset (all suites by default).
+    #[arg(long, value_enum)]
+    pub suite: Vec<Suite>,
+
+    /// Root directory for durable evidence.
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+
+    /// Internal CI evidence-server base URL.
+    #[arg(long)]
+    pub artifact_base: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]
