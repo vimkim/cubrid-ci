@@ -49,7 +49,6 @@ pub struct SuiteResult {
 pub enum SuiteState {
     Running,
     NotObserved,
-    EvidencePending,
     Completed,
     CollectionFailed,
 }
@@ -120,7 +119,6 @@ impl SuiteState {
         match self {
             Self::Running => "running",
             Self::NotObserved => "not_observed",
-            Self::EvidencePending => "evidence_pending",
             Self::Completed => "completed",
             Self::CollectionFailed => "collection_failed",
         }
@@ -363,8 +361,9 @@ async fn select_suite(
         Err(error) => return failed_suite(suite, error),
     };
     let execution = ExecutionIdentity { run_id, attempt };
-    if !status.state.eq_ignore_ascii_case("pending") && suite == Suite::Sql {
-        let request = crate::gha_evidence::SqlRequest {
+    if !status.state.eq_ignore_ascii_case("pending") {
+        let request = crate::gha_evidence::SuiteRequest {
+            suite,
             run_id,
             attempt,
             commit,
@@ -373,14 +372,15 @@ async fn select_suite(
             evidence_dir,
             status_snapshot_json: &snapshot.raw_json,
         };
-        return match crate::gha_evidence::collect_sql(request).await {
+        return match crate::gha_evidence::collect_suite(request).await {
             Ok(_) => (
                 SuiteResult {
                     state: SuiteState::Completed,
                     status: Some(status.clone()),
                     execution: Some(execution),
                     summary: Some(PathBuf::from(format!(
-                        "providers/github-actions/runs/{run_id}/attempts/{attempt}/test_sql/summary.json"
+                        "providers/github-actions/runs/{run_id}/attempts/{attempt}/{}/summary.json",
+                        suite.job_name()
                     ))),
                 },
                 None,
@@ -388,14 +388,9 @@ async fn select_suite(
             Err(error) => failed_suite_with_identity(suite, status.clone(), execution, error),
         };
     }
-    let state = if status.state.eq_ignore_ascii_case("pending") {
-        SuiteState::Running
-    } else {
-        SuiteState::EvidencePending
-    };
     (
         SuiteResult {
-            state,
+            state: SuiteState::Running,
             status: Some(status.clone()),
             execution: Some(execution),
             summary: None,

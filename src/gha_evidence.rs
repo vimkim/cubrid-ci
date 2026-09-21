@@ -14,6 +14,7 @@ use walkdir::WalkDir;
 
 use crate::diff::{extract_diff, stable_test_id};
 use crate::error::AppError;
+use crate::model::Suite;
 use crate::storage::{write_json_atomic, write_string_atomic};
 
 const MAX_INDEX_BYTES: usize = 1024 * 1024;
@@ -21,7 +22,43 @@ const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
 const MAX_GITHUB_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GITHUB_LOG_BYTES: usize = 32 * 1024 * 1024;
 
-pub struct SqlRequest<'a> {
+#[derive(Debug, Clone, Copy)]
+struct SuiteLayout {
+    remote_name: &'static str,
+    result_file: &'static str,
+    result_format: ResultFormat,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum ResultFormat {
+    SummaryInfo,
+    TestStatus,
+}
+
+impl SuiteLayout {
+    const fn for_suite(suite: Suite) -> Self {
+        match suite {
+            Suite::Medium => Self {
+                remote_name: "medium",
+                result_file: "summary_info",
+                result_format: ResultFormat::SummaryInfo,
+            },
+            Suite::Sql => Self {
+                remote_name: "sql",
+                result_file: "summary_info",
+                result_format: ResultFormat::SummaryInfo,
+            },
+            Suite::Shell => Self {
+                remote_name: "shell",
+                result_file: "test_status.data",
+                result_format: ResultFormat::TestStatus,
+            },
+        }
+    }
+}
+
+pub struct SuiteRequest<'a> {
+    pub suite: Suite,
     pub run_id: u64,
     pub attempt: u64,
     pub commit: &'a str,
@@ -116,14 +153,15 @@ struct JunitCase {
     skipped: bool,
 }
 
-pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppError> {
+pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, AppError> {
+    let layout = SuiteLayout::for_suite(request.suite);
     let execution_suite_dir = request
         .evidence_dir
         .join("providers/github-actions/runs")
         .join(request.run_id.to_string())
         .join("attempts")
         .join(request.attempt.to_string())
-        .join("test_sql");
+        .join(request.suite.job_name());
     let provider_raw = execution_suite_dir.join("raw");
     let suite_dir = execution_suite_dir;
     write_string_atomic(
@@ -156,7 +194,7 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
         .build()
         .map_err(|error| AppError::Remote(format!("create evidence-server client: {error}")))?;
     let run_root = artifact_base
-        .join(&format!("runs/{}/sql/", request.run_id))
+        .join(&format!("runs/{}/{}/", request.run_id, layout.remote_name))
         .map_err(|error| AppError::Remote(format!("construct evidence URL: {error}")))?;
 
     let split_meta = fetch_text(
@@ -202,13 +240,15 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
     write_string_atomic(&provider_raw.join("indexes/shards.html"), &shard_index)?;
     let shard_names = directory_entries(&shard_index, true)?;
     if shard_names.is_empty() {
-        return Err(AppError::Integrity(
-            "terminal SQL suite has no shard directories".to_owned(),
-        ));
+        return Err(AppError::Integrity(format!(
+            "terminal {} suite has no shard directories",
+            request.suite
+        )));
     }
     if shard_names != planned_shards || shard_names.len() as u64 != plan.parallelism {
         return Err(AppError::Integrity(format!(
-            "planned SQL shards ({}) do not match published shards ({})",
+            "planned {} shards ({}) do not match published shards ({})",
+            request.suite,
             planned_shards.len(),
             shard_names.len()
         )));
@@ -263,9 +303,10 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
             .as_ref()
             .is_some_and(|selected| selected != &build)
         {
-            return Err(AppError::Integrity(
-                "SQL shards do not identify one reused build execution".to_owned(),
-            ));
+            return Err(AppError::Integrity(format!(
+                "{} shards do not identify one reused build execution",
+                request.suite
+            )));
         }
         selected_build.get_or_insert_with(|| build.clone());
         let testcases = parse_testcase_provenance(&testcase_text)?;
@@ -273,20 +314,22 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
             .as_ref()
             .is_some_and(|selected| selected != &testcases)
         {
-            return Err(AppError::Integrity(
-                "SQL shards do not identify one testcase revision and branch".to_owned(),
-            ));
+            return Err(AppError::Integrity(format!(
+                "{} shards do not identify one testcase revision and branch",
+                request.suite
+            )));
         }
         selected_testcases.get_or_insert_with(|| testcases.clone());
         if testcases.sha != plan.testcase_sha || testcases.branch != plan.testcase_branch {
             return Err(AppError::Integrity(format!(
-                "shard {shard} testcase provenance disagrees with the SQL plan"
+                "shard {shard} testcase provenance disagrees with the {} plan",
+                request.suite
             )));
         }
 
-        let summary_info = fetch_text(
+        let workflow_result = fetch_text(
             &client,
-            shard_root.join("summary_info").unwrap(),
+            shard_root.join(layout.result_file).unwrap(),
             MAX_TEXT_BYTES,
         )
         .await?;
@@ -297,15 +340,18 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
         )
         .await?;
         write_string_atomic(
-            &provider_raw.join(format!("shards/{shard}/summary_info")),
-            &summary_info,
+            &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
+            &workflow_result,
         )?;
         write_string_atomic(
             &provider_raw.join(format!("shards/{shard}/shard.done")),
             &shard_done,
         )?;
-        validate_shard_done(&shard_done, &shard)?;
-        let shard_counts = parse_summary_info(&summary_info)?;
+        validate_shard_done(&shard_done, &shard, layout.remote_name)?;
+        let shard_counts = match layout.result_format {
+            ResultFormat::SummaryInfo => parse_summary_info(&workflow_result)?,
+            ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
+        };
         workflow_passed += shard_counts.passed;
         workflow_failed += shard_counts.failed;
         workflow_skipped += shard_counts.skipped;
@@ -326,7 +372,8 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
             .collect::<Vec<_>>();
         if junit_files.is_empty() {
             return Err(AppError::Integrity(format!(
-                "shard {shard} has no SQL JUnit XML"
+                "shard {shard} has no {} JUnit XML",
+                request.suite
             )));
         }
 
@@ -438,7 +485,7 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
         || plan.total != workflow_passed + workflow_failed + workflow_skipped
     {
         return Err(AppError::Integrity(format!(
-            "plan, summary_info, and JUnit counts disagree (planned {}, workflow {}/{}/{}, JUnit {}/{}/{})",
+            "plan, workflow result, and JUnit counts disagree (planned {}, workflow {}/{}/{}, JUnit {}/{}/{})",
             plan.total,
             workflow_passed,
             workflow_failed,
@@ -460,11 +507,16 @@ pub async fn collect_sql(request: SqlRequest<'_>) -> Result<SuiteSummary, AppErr
         )));
     }
 
-    write_raw_index(&provider_raw, request.run_id, request.attempt, "test_sql")?;
+    write_raw_index(
+        &provider_raw,
+        request.run_id,
+        request.attempt,
+        request.suite.job_name(),
+    )?;
 
     let summary = SuiteSummary {
         schema_version: 2,
-        suite: "test_sql".to_owned(),
+        suite: request.suite.job_name().to_owned(),
         ci_state: request.ci_state.to_ascii_lowercase(),
         collection_state: "complete".to_owned(),
         run_id: request.run_id,
@@ -797,9 +849,36 @@ fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
     Ok(counts)
 }
 
-fn validate_shard_done(value: &str, expected_index: &str) -> Result<(), AppError> {
+fn parse_test_status(value: &str) -> Result<WorkflowCounts, AppError> {
     let fields = parse_key_values(value);
-    if fields.get("suite") != Some(&"sql")
+    let count = |name| {
+        fields
+            .get(name)
+            .ok_or_else(|| AppError::Integrity(format!("test_status.data is missing {name}")))?
+            .parse::<u64>()
+            .map_err(|_| AppError::Integrity(format!("test_status.data has invalid {name}")))
+    };
+    let executed = count("total_executed_case_count")?;
+    let counts = WorkflowCounts {
+        passed: count("total_success_case_count")?,
+        failed: count("total_fail_case_count")?,
+        skipped: count("total_skip_case_count")?,
+    };
+    if executed != counts.passed + counts.failed {
+        return Err(AppError::Integrity(
+            "test_status.data executed count disagrees with success and failure counts".to_owned(),
+        ));
+    }
+    Ok(counts)
+}
+
+fn validate_shard_done(
+    value: &str,
+    expected_index: &str,
+    expected_suite: &str,
+) -> Result<(), AppError> {
+    let fields = parse_key_values(value);
+    if fields.get("suite") != Some(&expected_suite)
         || fields.get("idx") != Some(&expected_index)
         || fields.get("ctp_rc") != Some(&"0")
     {

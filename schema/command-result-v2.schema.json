@@ -47,7 +47,7 @@
       "type": "object",
       "required": ["state"],
       "properties": {
-        "state": { "enum": ["running", "not_observed", "evidence_pending", "completed", "collection_failed"] },
+        "state": { "enum": ["running", "not_observed", "completed", "collection_failed"] },
         "status": {
           "type": "object",
           "required": ["state", "reported_for_sha", "detail_url", "reported_at"],
