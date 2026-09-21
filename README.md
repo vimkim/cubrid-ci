@@ -1,161 +1,74 @@
-# cubrid-circleci-analyzer
+# cubrid-ci
 
-`cubrid-ci` fetches and normalizes the CircleCI evidence attached to an exact
-CUBRID pull-request commit. It supports the historical `test_medium`,
-`test_sql`, and `test_shell` jobs and produces durable evidence bundles for AI
-failure analysis.
+`cubrid-ci` inspects CUBRID pull-request status and collects durable,
+exact-commit GitHub Actions evidence for `test_medium`, `test_sql`, and
+`test_shell`.
 
-The collector never substitutes a result from another commit. It resolves the
-GitHub status on the requested SHA, then verifies the CircleCI job revision,
-job name, and build number before publishing output.
+## Requirements
 
-## Build and install
+- Rust 1.85+ for development; releases use the pinned Rust 1.89.0 toolchain
+- `gh`, authenticated for GitHub API access
+- `cubrid-pr-status`
+- access to the internal evidence server for terminal testcase evidence
 
-The development MSRV is Rust 1.85. Verified releases use the exact Rust 1.89.0
-toolchain pinned by `rust-toolchain.toml`.
+Run `cubrid-ci doctor` to validate the local setup.
 
-```sh
-cargo build                         # development/debug binary
-./scripts/build-release.sh          # verified release binary
-```
-
-The executable is named `cubrid-ci`.
-
-`cubrid-ci --version` reports the Cargo package version, source commit, and
-build class, for example:
-
-```text
-cubrid-ci 0.1.0 (dd5dd66e8e90, debug)
-cubrid-ci 0.1.0 (dd5dd66e8e90, release)
-```
-
-The same value is saved as `tool_version` in each commit manifest. Debug builds
-made outside a Git checkout can provide `CUBRID_CI_BUILD_GIT_SHA` explicitly.
-Release builds require a Git checkout and must use the exact `HEAD` commit.
-
-### Release guarantees
-
-`scripts/build-release.sh` is the canonical release entry point. It rejects
-staged, unstaged, untracked, and dirty-submodule changes; builds with the pinned
-Rust toolchain, target triple, `Cargo.lock`, deterministic source timestamp, and
-remapped checkout path; and checks the tree again after compilation. A supplied
-`CUBRID_CI_BUILD_GIT_SHA` must exactly equal `HEAD`.
-
-Successful output is written to:
-
-```text
-target/x86_64-unknown-linux-gnu/release/cubrid-ci
-target/x86_64-unknown-linux-gnu/release/cubrid-ci.build-info
-```
-
-The build-info receipt records the full Git SHA, toolchain, target, binary
-version, and SHA-256. The source-tree checks are also enforced from `build.rs`
-when Cargo actually compiles the release package. Use the wrapper for releases
-because Cargo may otherwise reuse an existing artifact without rerunning the
-build script.
-
-To test byte-for-byte reproducibility, build the same clean commit in two
-independent clones and compare the resulting hashes:
+## Commands
 
 ```sh
-./scripts/verify-release-reproducibility.sh
+# Show the PR associated with the current CUBRID worktree.
+cubrid-ci status
+
+# Show a specific PR.
+cubrid-ci status 7990
+
+# Collect all suites for local HEAD; local HEAD must equal the published PR head.
+cubrid-ci collect
+
+# Collect an explicit PR and exact commit.
+cubrid-ci collect 7990 --commit <40-character-sha>
+
+# Collect a subset, optionally waiting for terminal states.
+cubrid-ci collect 7990 --commit <sha> \
+  --suite test_sql --suite test_medium --wait --timeout 26h
+
+# Opt in to bounded artifacts from abnormal shards.
+cubrid-ci collect 7990 --commit <sha> --include-binaries \
+  --max-binary-bytes 268435456 --max-binary-total-bytes 536870912
 ```
 
-This verifies the pinned local release environment. Reproduction on a different
-operating system or linker requires an equivalently pinned build image.
-
-## Usage
-
-```sh
-cubrid-ci test-medium https://github.com/CUBRID/cubrid/pull/6864 c2cbeaf
-cubrid-ci test-sql https://github.com/CUBRID/cubrid/pull/6864
-cubrid-ci test-shell https://github.com/CUBRID/cubrid/pull/6864 \
-  --wait --timeout 26h
-```
-
-The commit is optional and defaults to the PR head resolved at command start.
-The resolved SHA remains pinned if the PR head moves while the tool is waiting.
-
-Useful options:
-
-```text
---data-dir PATH
---wait --timeout 26h --poll-interval 60s
---attempt CIRCLECI_JOB_NUMBER
---artifact-mode manifest|text|all
---max-artifact-bytes BYTES
---include-test-sources
---json
-```
-
-The default artifact mode is `manifest`: artifact metadata and URLs are
-recorded without downloading artifact payloads. Failed tests and failed
-CircleCI step output are still captured because step-output URLs can expire.
-Use `--artifact-mode text` to also download bounded textual diagnostics, or
-`--artifact-mode all` to include bounded binary artifacts such as core dumps.
-
-Collection progress is reported as concise `cubrid-ci:` status lines on
-standard error. Standard output remains reserved for the final human summary
-or the single JSON value emitted by `--json`, so it can be redirected or
-parsed independently.
-
-## Authentication
-
-Public GitHub and current CircleCI v1.1 endpoints work without credentials,
-subject to rate limits. Set `GH_TOKEN` or `GITHUB_TOKEN` for authenticated
-GitHub access and private testcase-source enrichment. Tokens and authorization
-headers are never written to the evidence bundle.
-
-## Output
-
-```text
-data/CBRD-26357/c2cbeaf/
-├── manifest.json
-├── test_medium/
-├── test_sql/
-│   ├── summary.json
-│   ├── failed-tc.txt
-│   ├── failed-tests.json
-│   ├── failures/<stable-id>/{metadata.json,message.txt,diff.txt}
-│   ├── logs/
-│   ├── artifacts.json
-│   └── attempts/<circleci-job>/raw/
-└── test_shell/
-```
-
-If a current result is missing or pending, the suite directory remains empty
-and `manifest.json` records the remote state. CI failure itself is data, so a
-successfully collected failed suite exits with code 0.
+All commands accept `--json`. A fully collected red suite exits successfully:
+CI outcome is data, while the process exit reports collection completeness and
+trustworthiness.
 
 | Exit | Meaning |
 |---:|---|
-| 0 | Terminal suite result validated and collected |
+| 0 | Requested terminal evidence was validated and collected |
 | 2 | Invalid input or configuration |
-| 3 | Result unavailable, pending, build-blocked, or timed out |
-| 4 | GitHub/CircleCI identity mismatch |
-| 5 | Remote API, authentication, or rate-limit failure |
-| 6 | Local storage, schema, or normalization failure |
+| 3 | Unfinished, expired, or job-level evidence unavailable |
+| 4 | Identity, integrity, or malformed-evidence failure |
+| 5 | Remote access or configured-size failure |
+| 6 | Local storage or serialization failure |
 
-See [PLAN.md](PLAN.md) for the complete storage and verification contracts and
-[schema/](schema/) for the versioned normalized JSON schemas.
+## Evidence storage
 
-## Development
+The default evidence root is `~/.local/share/cubrid-ci-data` (for this user,
+`/home/vimkim/.local/share/cubrid-ci-data`). Override it with `--data-dir`,
+`CUBRID_CI_DATA_DIR`, or `~/.config/cubrid-ci/config.toml`, in that precedence
+order.
+
+GitHub Actions provider evidence is stored by PR, commit, run, attempt, and
+suite. Provider inputs are immutable; `manifest.json` atomically records the
+executions selected by the latest collection. Historical schema-v1 CircleCI
+bundles remain recognizable but are never rewritten.
+
+## Development and release
 
 ```sh
-cargo build
-cargo test
-cargo clippy --all-targets --all-features -- -D warnings
+just verify
+./scripts/build-release.sh
+./scripts/verify-release-reproducibility.sh
 ```
 
-The root `justfile` provides shorter commands for everyday work:
-
-```sh
-just                 # list available recipes
-just build           # debug build
-just run --help      # run cubrid-ci with arguments
-just test            # run all tests
-just release         # clean, pinned, reproducible release build
-just verify-release-reproducible
-just install         # install from this checkout
-just verify          # formatting, check, tests, and strict Clippy
-```
+Version 0.2.0 intentionally exposes only `status`, `collect`, and `doctor`.
+The old suite-specific CircleCI commands are unsupported.

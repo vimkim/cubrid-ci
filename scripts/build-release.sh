@@ -5,7 +5,7 @@ readonly script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)
 readonly repo_root=$(cd -- "$script_dir/.." && pwd -P)
 readonly release_target=x86_64-unknown-linux-gnu
 readonly required_rust_version=1.89.0
-readonly canonical_source_path=/usr/src/cubrid-circleci-analyzer
+readonly canonical_source_path=/usr/src/cubrid-ci
 readonly binary_path="$repo_root/target/$release_target/release/cubrid-ci"
 readonly receipt_path="$binary_path.build-info"
 

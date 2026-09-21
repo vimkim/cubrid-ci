@@ -1,10 +1,10 @@
 use std::process::ExitCode;
 
 use clap::Parser;
-use cubrid_circleci_analyzer::cli::Commands;
-use cubrid_circleci_analyzer::config::{ConfigOverride, ResolvedConfig};
-use cubrid_circleci_analyzer::doctor::DoctorResult;
-use cubrid_circleci_analyzer::{Cli, Collector, CollectorConfig};
+use cubrid_ci::Cli;
+use cubrid_ci::cli::Commands;
+use cubrid_ci::config::{ConfigOverride, ResolvedConfig};
+use cubrid_ci::doctor::DoctorResult;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -13,7 +13,7 @@ async fn main() -> ExitCode {
     init_tracing(cli.verbose);
 
     if let Commands::Status(args) = &cli.command {
-        let error = cubrid_circleci_analyzer::status::execute(args, cli.json);
+        let error = cubrid_ci::status::execute(args, cli.json);
         emit_error(&cli, &error);
         return ExitCode::from(error.exit_code());
     }
@@ -46,7 +46,7 @@ async fn main() -> ExitCode {
     }
 
     if let Commands::Collect(args) = &cli.command {
-        return match cubrid_circleci_analyzer::gha_collect::run(args).await {
+        return match cubrid_ci::gha_collect::run(args).await {
             Ok(result) => {
                 if cli.json {
                     match serde_json::to_string_pretty(&result) {
@@ -68,43 +68,10 @@ async fn main() -> ExitCode {
         };
     }
 
-    let config = match CollectorConfig::from_cli(&cli) {
-        Ok(config) => config,
-        Err(error) => {
-            emit_error(&cli, &error);
-            return ExitCode::from(error.exit_code());
-        }
-    };
-
-    match Collector::new(config) {
-        Ok(collector) => match collector.run().await {
-            Ok(result) => {
-                if cli.json {
-                    match serde_json::to_string_pretty(&result) {
-                        Ok(json) => println!("{json}"),
-                        Err(error) => {
-                            eprintln!("error: failed to serialize command result: {error}");
-                            return ExitCode::from(6);
-                        }
-                    }
-                } else {
-                    println!("{}", result.human_summary());
-                }
-                ExitCode::SUCCESS
-            }
-            Err(error) => {
-                emit_error(&cli, &error);
-                ExitCode::from(error.exit_code())
-            }
-        },
-        Err(error) => {
-            emit_error(&cli, &error);
-            ExitCode::from(error.exit_code())
-        }
-    }
+    unreachable!("clap requires one of status, collect, or doctor")
 }
 
-fn emit_error(cli: &Cli, error: &cubrid_circleci_analyzer::AppError) {
+fn emit_error(cli: &Cli, error: &cubrid_ci::AppError) {
     if cli.json {
         let json = serde_json::json!({
             "ok": false,

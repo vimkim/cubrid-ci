@@ -1,9 +1,9 @@
 [package]
-name = "cubrid-circleci-analyzer"
-version = "0.1.0"
+name = "cubrid-ci"
+version = "0.2.0"
 edition = "2024"
 rust-version = "1.85"
-description = "Fetch and normalize CUBRID CircleCI failure evidence"
+description = "Inspect CUBRID pull-request status and collect exact-commit GitHub Actions evidence"
 license = "Apache-2.0"
 publish = false
 
@@ -18,16 +18,15 @@ futures-util = "0.3"
 hex = "0.4"
 humantime = "2.3"
 regex = "1.12"
-reqwest = { version = "0.13", default-features = false, features = ["json", "rustls", "stream"] }
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 roxmltree = "0.20"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 tempfile = "3"
 thiserror = "2"
-tokio = { version = "1", features = ["fs", "io-util", "macros", "rt-multi-thread", "signal", "time"] }
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }
 toml = "0.8"
-tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter", "fmt"] }
 url = "2"
 walkdir = "2"
