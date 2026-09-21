@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Read;
 use std::path::{Path, PathBuf};
@@ -86,6 +86,8 @@ pub struct SuiteSummary {
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TestCounts {
     pub planned: u64,
+    pub run: u64,
+    pub unrun: u64,
     pub tests: u64,
     pub passed: u64,
     pub failures: u64,
@@ -219,6 +221,19 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         .into_iter()
         .filter_map(|name| name.strip_suffix(".list").map(ToOwned::to_owned))
         .collect::<Vec<_>>();
+    let plan_table_text = fetch_text(
+        &client,
+        run_root.join("plan/plan.tsv").unwrap(),
+        MAX_TEXT_BYTES,
+    )
+    .await?;
+    write_string_atomic(&provider_raw.join("plan/plan.tsv"), &plan_table_text)?;
+    let plan_table = parse_plan_table(&plan_table_text)?;
+    if plan_table.values().sum::<u64>() != plan.total {
+        return Err(AppError::Integrity(
+            "plan.tsv assigned counts do not add up to split.meta total".to_owned(),
+        ));
+    }
 
     let failed_list = fetch_text(
         &client,
@@ -253,9 +268,26 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             shard_names.len()
         )));
     }
+    if plan_table.keys().cloned().collect::<Vec<_>>() != planned_shards {
+        return Err(AppError::Integrity(
+            "plan.tsv shard identities disagree with planned shard files".to_owned(),
+        ));
+    }
 
     let failed_inventory = parse_failed_list(&failed_list)?;
     let failed_inventory_count = failed_inventory.len() as u64;
+    let mut inventory_by_shard: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+    for (shard, name) in &failed_inventory {
+        if !inventory_by_shard
+            .entry(shard.clone())
+            .or_default()
+            .insert(name.clone())
+        {
+            return Err(AppError::Integrity(format!(
+                "failed-case inventory repeats {shard}/{name}"
+            )));
+        }
+    }
     let mut shards = Vec::new();
     let mut counts = TestCounts::default();
     let mut junit_failures: BTreeMap<(String, String), JunitCase> = BTreeMap::new();
@@ -347,11 +379,26 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             &provider_raw.join(format!("shards/{shard}/shard.done")),
             &shard_done,
         )?;
-        validate_shard_done(&shard_done, &shard, layout.remote_name)?;
+        let assigned = validate_shard_done(&shard_done, &shard, layout.remote_name)?;
+        let planned = plan_table
+            .get(&shard)
+            .copied()
+            .ok_or_else(|| AppError::Integrity(format!("shard {shard} is absent from plan.tsv")))?;
+        if assigned != planned {
+            return Err(AppError::Integrity(format!(
+                "shard {shard} completion says {assigned} assigned but plan.tsv says {planned}"
+            )));
+        }
         let shard_counts = match layout.result_format {
             ResultFormat::SummaryInfo => parse_summary_info(&workflow_result)?,
             ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
         };
+        if shard_counts.passed + shard_counts.failed + shard_counts.skipped != planned {
+            return Err(AppError::Integrity(format!(
+                "shard {shard} handled {} cases but was assigned {planned}",
+                shard_counts.passed + shard_counts.failed + shard_counts.skipped
+            )));
+        }
         workflow_passed += shard_counts.passed;
         workflow_failed += shard_counts.failed;
         workflow_skipped += shard_counts.skipped;
@@ -377,6 +424,7 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             )));
         }
 
+        let mut junit_shard_counts = WorkflowCounts::default();
         for file in &junit_files {
             let xml = fetch_text(
                 &client,
@@ -389,14 +437,56 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
                 counts.tests += 1;
                 if case.failure.is_some() {
                     counts.failures += 1;
-                    junit_failures.insert((shard.clone(), case.name.clone()), case);
+                    junit_shard_counts.failed += 1;
+                    junit_shard_counts.failed_names.insert(case.name.clone());
+                    if junit_failures
+                        .insert((shard.clone(), case.name.clone()), case)
+                        .is_some()
+                    {
+                        return Err(AppError::Integrity(format!(
+                            "JUnit repeats a failed testcase in shard {shard}"
+                        )));
+                    }
                 } else if case.error.is_some() {
                     counts.errors += 1;
-                    junit_failures.insert((shard.clone(), case.name.clone()), case);
+                    junit_shard_counts.failed += 1;
+                    junit_shard_counts.failed_names.insert(case.name.clone());
+                    if junit_failures
+                        .insert((shard.clone(), case.name.clone()), case)
+                        .is_some()
+                    {
+                        return Err(AppError::Integrity(format!(
+                            "JUnit repeats an errored testcase in shard {shard}"
+                        )));
+                    }
                 } else if case.skipped {
                     counts.skipped += 1;
+                    junit_shard_counts.skipped += 1;
+                } else {
+                    junit_shard_counts.passed += 1;
                 }
             }
+        }
+        if junit_shard_counts.passed != shard_counts.passed
+            || junit_shard_counts.failed != shard_counts.failed
+            || junit_shard_counts.skipped != shard_counts.skipped
+        {
+            return Err(AppError::Integrity(format!(
+                "shard {shard} workflow result and JUnit counts disagree"
+            )));
+        }
+        let inventory_names = inventory_by_shard.get(&shard).cloned().unwrap_or_default();
+        if junit_shard_counts.failed_names != inventory_names {
+            return Err(AppError::Integrity(format!(
+                "shard {shard} failed-list and JUnit testcase identities disagree"
+            )));
+        }
+        if matches!(layout.result_format, ResultFormat::SummaryInfo)
+            && shard_counts.failed_names != inventory_names
+        {
+            return Err(AppError::Integrity(format!(
+                "shard {shard} summary_info and failed-list testcase identities disagree"
+            )));
         }
         shards.push(ShardSummary {
             index: shard,
@@ -476,6 +566,10 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         )));
     }
     counts.planned = plan.total;
+    counts.run = workflow_passed + workflow_failed;
+    counts.unrun = plan
+        .total
+        .saturating_sub(workflow_passed + workflow_failed + workflow_skipped);
     counts.passed = counts
         .tests
         .saturating_sub(counts.failures + counts.errors + counts.skipped);
@@ -714,15 +808,27 @@ fn directory_entries(html: &str, directories: bool) -> Result<Vec<String>, AppEr
     Ok(entries)
 }
 
-fn parse_key_values(value: &str) -> BTreeMap<&str, &str> {
-    value
-        .lines()
-        .filter_map(|line| line.split_once('='))
-        .collect()
+fn parse_key_values(value: &str) -> Result<BTreeMap<&str, &str>, AppError> {
+    let mut fields = BTreeMap::new();
+    for (index, line) in value.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let (name, field_value) = line
+            .split_once('=')
+            .ok_or_else(|| AppError::Integrity(format!("malformed key-value row {}", index + 1)))?;
+        if name.is_empty() || fields.insert(name, field_value).is_some() {
+            return Err(AppError::Integrity(format!(
+                "duplicate or empty key on row {}",
+                index + 1
+            )));
+        }
+    }
+    Ok(fields)
 }
 
 fn parse_build_provenance(value: &str) -> Result<BuildProvenance, AppError> {
-    let fields = parse_key_values(value);
+    let fields = parse_key_values(value)?;
     let required = |name| {
         fields.get(name).copied().ok_or_else(|| {
             AppError::Integrity(format!("build.read is missing required field {name}"))
@@ -744,7 +850,7 @@ fn parse_build_provenance(value: &str) -> Result<BuildProvenance, AppError> {
 }
 
 fn parse_testcase_provenance(value: &str) -> Result<TestcaseProvenance, AppError> {
-    let fields = parse_key_values(value);
+    let fields = parse_key_values(value)?;
     let sha = fields
         .get("tc_sha")
         .filter(|value| value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()))
@@ -787,7 +893,7 @@ struct SqlPlan {
 }
 
 fn parse_split_meta(value: &str) -> Result<SqlPlan, AppError> {
-    let fields = parse_key_values(value);
+    let fields = parse_key_values(value)?;
     let field = |name| {
         fields
             .get(name)
@@ -825,6 +931,42 @@ struct WorkflowCounts {
     passed: u64,
     failed: u64,
     skipped: u64,
+    failed_names: BTreeSet<String>,
+}
+
+fn parse_plan_table(value: &str) -> Result<BTreeMap<String, u64>, AppError> {
+    let mut plan = BTreeMap::new();
+    for (index, line) in value.lines().enumerate() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let fields = line.split('\t').collect::<Vec<_>>();
+        if fields.len() < 2
+            || fields[0].is_empty()
+            || !fields[0].bytes().all(|byte| byte.is_ascii_digit())
+        {
+            return Err(AppError::Integrity(format!(
+                "plan.tsv has a malformed row {}",
+                index + 1
+            )));
+        }
+        let count = fields[1].parse().map_err(|_| {
+            AppError::Integrity(format!(
+                "plan.tsv has an invalid count on row {}",
+                index + 1
+            ))
+        })?;
+        if plan.insert(fields[0].to_owned(), count).is_some() {
+            return Err(AppError::Integrity(format!(
+                "plan.tsv repeats shard {}",
+                fields[0]
+            )));
+        }
+    }
+    if plan.is_empty() {
+        return Err(AppError::Integrity("plan.tsv is empty".to_owned()));
+    }
+    Ok(plan)
 }
 
 fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
@@ -836,7 +978,18 @@ fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
         };
         match capture.get(1).map(|value| value.as_str()) {
             Some("ok") => counts.passed += 1,
-            Some("nok") => counts.failed += 1,
+            Some("nok") => {
+                counts.failed += 1;
+                let raw_name = &line[..capture.get(0).expect("whole regex capture").start()];
+                let name = raw_name
+                    .split_once("/cubrid-testcases/")
+                    .map_or(raw_name, |(_, relative)| relative);
+                if !counts.failed_names.insert(name.to_owned()) {
+                    return Err(AppError::Integrity(format!(
+                        "summary_info repeats failed testcase {name}"
+                    )));
+                }
+            }
             None => counts.skipped += 1,
             _ => unreachable!("verdict regex has only ok and nok alternatives"),
         }
@@ -850,7 +1003,7 @@ fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
 }
 
 fn parse_test_status(value: &str) -> Result<WorkflowCounts, AppError> {
-    let fields = parse_key_values(value);
+    let fields = parse_key_values(value)?;
     let count = |name| {
         fields
             .get(name)
@@ -863,6 +1016,7 @@ fn parse_test_status(value: &str) -> Result<WorkflowCounts, AppError> {
         passed: count("total_success_case_count")?,
         failed: count("total_fail_case_count")?,
         skipped: count("total_skip_case_count")?,
+        failed_names: BTreeSet::new(),
     };
     if executed != counts.passed + counts.failed {
         return Err(AppError::Integrity(
@@ -876,8 +1030,8 @@ fn validate_shard_done(
     value: &str,
     expected_index: &str,
     expected_suite: &str,
-) -> Result<(), AppError> {
-    let fields = parse_key_values(value);
+) -> Result<u64, AppError> {
+    let fields = parse_key_values(value)?;
     if fields.get("suite") != Some(&expected_suite)
         || fields.get("idx") != Some(&expected_index)
         || fields.get("ctp_rc") != Some(&"0")
@@ -886,7 +1040,11 @@ fn validate_shard_done(
             "shard {expected_index} completion record is inconsistent or abnormal"
         )));
     }
-    Ok(())
+    fields
+        .get("assigned")
+        .ok_or_else(|| AppError::Integrity("shard.done is missing assigned".to_owned()))?
+        .parse()
+        .map_err(|_| AppError::Integrity("shard.done has invalid assigned".to_owned()))
 }
 
 #[derive(Debug, Serialize)]
@@ -1013,5 +1171,14 @@ mod tests {
         )
         .unwrap();
         assert_eq!(cases[0].failure.as_deref(), Some("x\n[Diff]\n-a\n+b"));
+    }
+
+    #[test]
+    fn rejects_ambiguous_duplicate_provenance_fields() {
+        let error = parse_build_provenance(
+            "sha=1111111111111111111111111111111111111111\nsha=2222222222222222222222222222222222222222\nrun_id=1\n",
+        )
+        .unwrap_err();
+        assert_eq!(error.kind(), crate::error::ExitKind::Integrity);
     }
 }

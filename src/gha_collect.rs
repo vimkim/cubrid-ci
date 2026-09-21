@@ -385,7 +385,30 @@ async fn select_suite(
                 },
                 None,
             ),
-            Err(error) => failed_suite_with_identity(suite, status.clone(), execution, error),
+            Err(error) => {
+                let marker = evidence_dir
+                    .join("providers/github-actions/runs")
+                    .join(run_id.to_string())
+                    .join("attempts")
+                    .join(attempt.to_string())
+                    .join(suite.job_name())
+                    .join("untrusted.json");
+                let diagnostic = serde_json::json!({
+                    "schema_version": 2,
+                    "trusted": false,
+                    "kind": error.kind().as_str(),
+                    "message": error.to_string(),
+                });
+                if let Err(storage_error) = write_json_atomic(&marker, &diagnostic) {
+                    return failed_suite_with_identity(
+                        suite,
+                        status.clone(),
+                        execution,
+                        storage_error,
+                    );
+                }
+                failed_suite_with_identity(suite, status.clone(), execution, error)
+            }
         };
     }
     (

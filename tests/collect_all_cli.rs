@@ -46,6 +46,13 @@ async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
         let summary = result["suites"][suite]["summary"].as_str().unwrap();
         assert!(output_dir.join(summary).is_file());
     }
+    let shell_summary_path = result["suites"]["test_shell"]["summary"].as_str().unwrap();
+    let shell_summary: Value =
+        serde_json::from_slice(&fs::read(output_dir.join(shell_summary_path)).unwrap()).unwrap();
+    assert_eq!(shell_summary["run_id"], 300);
+    assert_eq!(shell_summary["attempt"], 3);
+    assert_eq!(shell_summary["shards"][0]["build"]["run_id"], 250);
+    assert_eq!(shell_summary["shards"][0]["build"]["run_attempt"], 1);
     assert_eq!(
         fs::read_to_string(output_dir.join(
             "providers/github-actions/runs/300/attempts/3/test_shell/raw/shards/00/test_status.data"
@@ -140,7 +147,7 @@ fn status(suite: &str, state: &str, run_id: u64) -> Value {
 }
 
 async fn mount_medium(server: &MockServer) {
-    mount_common(server, 200, "medium", "").await;
+    mount_common(server, 200, "medium", "", 200).await;
     mount(
         server,
         "/runs/200/medium/shard/00/summary_info",
@@ -156,7 +163,7 @@ async fn mount_medium(server: &MockServer) {
 }
 
 async fn mount_shell(server: &MockServer) {
-    mount_common(server, 300, "shell", "00\tshell/foo/cases/foo.sh\n").await;
+    mount_common(server, 300, "shell", "00\tshell/foo/cases/foo.sh\n", 250).await;
     mount(
         server,
         "/runs/300/shell/shard/00/test_status.data",
@@ -180,7 +187,13 @@ async fn mount_shell(server: &MockServer) {
     .await;
 }
 
-async fn mount_common(server: &MockServer, run_id: u64, suite: &str, failed: &str) {
+async fn mount_common(
+    server: &MockServer,
+    run_id: u64,
+    suite: &str,
+    failed: &str,
+    build_run_id: u64,
+) {
     let root = format!("/runs/{run_id}/{suite}");
     mount(
         server,
@@ -194,6 +207,7 @@ async fn mount_common(server: &MockServer, run_id: u64, suite: &str, failed: &st
         "<a href=\"00.list\">00.list</a>",
     )
     .await;
+    mount(server, &format!("{root}/plan/plan.tsv"), "00\t1\t1\t1.0\n").await;
     mount(server, &format!("{root}/shard/"), "<a href=\"00/\">00/</a>").await;
     mount(
         server,
@@ -219,7 +233,7 @@ async fn mount_common(server: &MockServer, run_id: u64, suite: &str, failed: &st
     mount(
         server,
         &format!("{root}/shard/00/build.read"),
-        &format!("sha={SHA}\nmode=debug\nns=develop\nrun_id={run_id}\nrun_attempt=1\n"),
+        &format!("sha={SHA}\nmode=debug\nns=develop\nrun_id={build_run_id}\nrun_attempt=1\n"),
     )
     .await;
     mount(

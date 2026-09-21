@@ -15,9 +15,11 @@
     "verdict": { "enum": ["pass", "fail"] },
     "counts": {
       "type": "object",
-      "required": ["planned", "tests", "passed", "failures", "errors", "skipped"],
+      "required": ["planned", "run", "unrun", "tests", "passed", "failures", "errors", "skipped"],
       "properties": {
         "planned": { "type": "integer", "minimum": 0 },
+        "run": { "type": "integer", "minimum": 0 },
+        "unrun": { "type": "integer", "minimum": 0 },
         "tests": { "type": "integer", "minimum": 0 },
         "passed": { "type": "integer", "minimum": 0 },
         "failures": { "type": "integer", "minimum": 0 },

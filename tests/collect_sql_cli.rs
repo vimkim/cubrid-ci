@@ -15,6 +15,8 @@ async fn terminal_red_sql_suite_is_a_successful_evidence_collection() {
     mount_evidence(
         &server,
         "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
     )
     .await;
     let commands = tempfile::tempdir().unwrap();
@@ -61,6 +63,8 @@ async fn terminal_red_sql_suite_is_a_successful_evidence_collection() {
     assert_eq!(summary["ci_state"], "failure");
     assert_eq!(summary["counts"]["tests"], 1);
     assert_eq!(summary["counts"]["planned"], 1);
+    assert_eq!(summary["counts"]["run"], 1);
+    assert_eq!(summary["counts"]["unrun"], 0);
     assert_eq!(summary["counts"]["failures"], 1);
     assert_eq!(summary["verdict"], "fail");
     assert_eq!(summary["shards"][0]["build"]["sha"], SHA);
@@ -125,6 +129,8 @@ async fn contradictory_workflow_counts_are_an_integrity_failure() {
     mount_evidence(
         &server,
         "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:ok 1200ms\n",
+        SHA,
+        1,
     )
     .await;
     let commands = tempfile::tempdir().unwrap();
@@ -138,6 +144,97 @@ async fn contradictory_workflow_counts_are_an_integrity_failure() {
     assert_eq!(result["ok"], false);
     assert_eq!(result["suites"]["test_sql"]["state"], "collection_failed");
     assert_eq!(result["errors"][0]["kind"], "integrity");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        output_dir
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/untrusted.json")
+            .is_file()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn mismatched_shard_build_is_retained_as_untrusted_integrity_evidence() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        "2222222222222222222222222222222222222222",
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["kind"], "integrity");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let untrusted: Value = serde_json::from_slice(
+        &fs::read(
+            output_dir.join("providers/github-actions/runs/123/attempts/2/test_sql/untrusted.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(untrusted["trusted"], false);
+    assert_eq!(untrusted["kind"], "integrity");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shard_assignment_mismatch_is_an_integrity_failure() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        2,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["kind"], "integrity");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("assigned")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn swapped_testcase_identity_is_an_integrity_failure() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/other.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["kind"], "integrity");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("testcase identities")
+    );
 }
 
 fn write_ci_commands(commands: &Path, server: &MockServer) {
@@ -216,7 +313,10 @@ fn status_snapshot() -> Value {
     })
 }
 
-async fn mount_evidence(server: &MockServer, summary_info: &str) {
+async fn mount_evidence(server: &MockServer, summary_info: &str, build_sha: &str, assigned: u64) {
+    let build_read =
+        format!("sha={build_sha}\nmode=debug\nns=develop\nrun_id=123\nrun_attempt=2\n");
+    let shard_done = format!("suite=sql\nidx=00\nassigned={assigned}\nctp_rc=0\n");
     for (url_path, body) in [
         (
             "/runs/123/sql/plan/split.meta",
@@ -230,6 +330,7 @@ async fn mount_evidence(server: &MockServer, summary_info: &str) {
             "/runs/123/sql/plan/shards/",
             "<a href=\"00.list\">00.list</a>",
         ),
+        ("/runs/123/sql/plan/plan.tsv", "00\t1\t1\t1.0\n"),
         ("/runs/123/sql/shard/", "<a href=\"00/\">00/</a>"),
         (
             "/runs/123/sql/shard/00/test-results/",
@@ -240,16 +341,7 @@ async fn mount_evidence(server: &MockServer, summary_info: &str) {
             "00\tsql/bugs/cases/bug_123.sql\n",
         ),
         ("/runs/123/sql/collect/verdict", "fail\n"),
-        (
-            "/runs/123/sql/shard/00/build.read",
-            concat!(
-                "sha=1111111111111111111111111111111111111111\n",
-                "mode=debug\n",
-                "ns=develop\n",
-                "run_id=123\n",
-                "run_attempt=2\n"
-            ),
-        ),
+        ("/runs/123/sql/shard/00/build.read", build_read.as_str()),
         (
             "/runs/123/sql/shard/00/tc.read",
             concat!(
@@ -258,10 +350,7 @@ async fn mount_evidence(server: &MockServer, summary_info: &str) {
             ),
         ),
         ("/runs/123/sql/shard/00/summary_info", summary_info),
-        (
-            "/runs/123/sql/shard/00/shard.done",
-            "suite=sql\nidx=00\nassigned=1\nctp_rc=0\n",
-        ),
+        ("/runs/123/sql/shard/00/shard.done", shard_done.as_str()),
         (
             "/runs/123/sql/shard/00/test-results/results.xml",
             concat!(
