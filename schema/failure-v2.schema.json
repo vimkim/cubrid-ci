@@ -1,0 +1,20 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/failure-v2.schema.json",
+  "title": "CUBRID CI failure evidence v2",
+  "type": "object",
+  "required": ["schema_version", "stable_id", "name", "shard", "class_name", "duration_seconds", "result", "diff_extraction", "message_path", "diff_path"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "stable_id": { "type": "string", "pattern": "^[A-Za-z0-9_.-]+$" },
+    "name": { "type": "string", "minLength": 1 },
+    "shard": { "type": "string", "pattern": "^[0-9]+$" },
+    "class_name": { "type": ["string", "null"] },
+    "duration_seconds": { "type": ["number", "null"], "minimum": 0 },
+    "result": { "enum": ["failure", "error"] },
+    "diff_extraction": { "enum": ["extracted", "not_available"] },
+    "message_path": { "type": "string" },
+    "diff_path": { "type": ["string", "null"] }
+  },
+  "additionalProperties": false
+}

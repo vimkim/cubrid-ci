@@ -8,6 +8,7 @@ pub mod diff;
 pub mod doctor;
 pub mod error;
 pub mod gha_collect;
+pub mod gha_evidence;
 pub mod github;
 pub mod http;
 pub mod model;

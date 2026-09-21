@@ -1,0 +1,19 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/manifest-v2.schema.json",
+  "title": "CUBRID CI evidence snapshot manifest v2",
+  "type": "object",
+  "required": ["schema_version", "ok", "repository", "pr", "commit", "collected_at", "output_dir", "suites", "errors"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "ok": { "type": "boolean" },
+    "repository": { "const": "CUBRID/cubrid" },
+    "pr": { "type": "object", "required": ["number", "url", "title", "head_sha"] },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "output_dir": { "type": "string" },
+    "suites": { "type": "object", "minProperties": 1 },
+    "errors": { "type": "array" }
+  },
+  "additionalProperties": false
+}

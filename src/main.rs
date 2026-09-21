@@ -46,7 +46,7 @@ async fn main() -> ExitCode {
     }
 
     if let Commands::Collect(args) = &cli.command {
-        return match cubrid_circleci_analyzer::gha_collect::run(args) {
+        return match cubrid_circleci_analyzer::gha_collect::run(args).await {
             Ok(result) => {
                 if cli.json {
                     match serde_json::to_string_pretty(&result) {

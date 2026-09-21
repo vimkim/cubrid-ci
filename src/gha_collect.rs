@@ -40,6 +40,8 @@ pub struct SuiteResult {
     pub status: Option<StatusIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub execution: Option<ExecutionIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub summary: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -48,6 +50,7 @@ pub enum SuiteState {
     Running,
     NotObserved,
     EvidencePending,
+    Completed,
     CollectionFailed,
 }
 
@@ -76,10 +79,14 @@ impl CollectResult {
     pub fn exit_code(&self) -> u8 {
         if self.ok {
             0
+        } else if self.errors.iter().any(|issue| issue.kind == "storage") {
+            6
         } else if self.errors.iter().any(|issue| issue.kind == "integrity") {
             4
         } else if self.errors.iter().any(|issue| issue.kind == "remote") {
             5
+        } else if self.errors.iter().any(|issue| issue.kind == "input") {
+            2
         } else {
             3
         }
@@ -92,8 +99,13 @@ impl CollectResult {
             .map(|(name, result)| format!("{name}={}", result.state.as_str()))
             .collect::<Vec<_>>()
             .join(", ");
+        let completeness = if self.ok {
+            "evidence"
+        } else {
+            "incomplete evidence"
+        };
         format!(
-            "collected incomplete evidence snapshot for {}#{} at {}: {} -> {}",
+            "collected {completeness} snapshot for {}#{} at {}: {} -> {}",
             self.repository,
             self.pr.number,
             &self.commit[..7],
@@ -109,12 +121,13 @@ impl SuiteState {
             Self::Running => "running",
             Self::NotObserved => "not_observed",
             Self::EvidencePending => "evidence_pending",
+            Self::Completed => "completed",
             Self::CollectionFailed => "collection_failed",
         }
     }
 }
 
-pub fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
+pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
     let explicit = args.pr.is_some();
     let selected_commit = select_commit(args)?;
     let snapshot = status_snapshot(args.pr.as_deref())?;
@@ -130,24 +143,33 @@ pub fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
         args.suite.clone()
     };
 
-    let mut suites = BTreeMap::new();
-    let mut errors = Vec::new();
-    for suite in requested_suites {
-        let (suite_snapshot, issue) = select_suite(&snapshot, suite, &selected_commit);
-        suites.insert(suite.job_name().to_owned(), suite_snapshot);
-        if let Some(issue) = issue {
-            errors.push(issue);
-        }
-    }
-
     let output_dir = config
         .data_dir
         .join("github-actions/CUBRID-cubrid")
         .join(format!("pr-{}", snapshot.pr.number))
         .join(&selected_commit);
+    let mut suites = BTreeMap::new();
+    let mut errors = Vec::new();
+    for suite in requested_suites {
+        let (suite_result, issue) = select_suite(
+            &snapshot,
+            suite,
+            &selected_commit,
+            config.artifact_base.as_ref(),
+            &output_dir,
+        )
+        .await;
+        suites.insert(suite.job_name().to_owned(), suite_result);
+        if let Some(issue) = issue {
+            errors.push(issue);
+        }
+    }
+    let ok = suites
+        .values()
+        .all(|suite| suite.state == SuiteState::Completed);
     let result = CollectResult {
         schema_version: 2,
-        ok: false,
+        ok,
         repository: snapshot.repository,
         pr: PrIdentity {
             number: snapshot.pr.number,
@@ -222,10 +244,13 @@ fn status_snapshot(pr: Option<&str>) -> Result<StatusSnapshot, AppError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )));
     }
-    serde_json::from_slice(&output.stdout).map_err(|source| AppError::Json {
-        endpoint: "cubrid-pr-status --json --history 0".to_owned(),
-        source,
-    })
+    let mut snapshot: StatusSnapshot =
+        serde_json::from_slice(&output.stdout).map_err(|source| AppError::Json {
+            endpoint: "cubrid-pr-status --json --history 0".to_owned(),
+            source,
+        })?;
+    snapshot.raw_json = output.stdout;
+    Ok(snapshot)
 }
 
 fn canonical_pr(pr: &str) -> Result<String, AppError> {
@@ -289,10 +314,12 @@ fn validate_snapshot(
     Ok(())
 }
 
-fn select_suite(
+async fn select_suite(
     snapshot: &StatusSnapshot,
     suite: Suite,
     commit: &str,
+    artifact_base: Option<&Url>,
+    evidence_dir: &std::path::Path,
 ) -> (SuiteResult, Option<CollectIssue>) {
     let name = format!("gha-ci: {}", suite.job_name());
     let Some(check) = snapshot
@@ -305,6 +332,7 @@ fn select_suite(
                 state: SuiteState::NotObserved,
                 status: None,
                 execution: None,
+                summary: None,
             },
             None,
         );
@@ -315,6 +343,7 @@ fn select_suite(
                 state: SuiteState::NotObserved,
                 status: None,
                 execution: None,
+                summary: None,
             },
             None,
         );
@@ -333,6 +362,32 @@ fn select_suite(
         Ok(attempt) => attempt,
         Err(error) => return failed_suite(suite, error),
     };
+    let execution = ExecutionIdentity { run_id, attempt };
+    if !status.state.eq_ignore_ascii_case("pending") && suite == Suite::Sql {
+        let request = crate::gha_evidence::SqlRequest {
+            run_id,
+            attempt,
+            commit,
+            ci_state: &status.state,
+            artifact_base,
+            evidence_dir,
+            status_snapshot_json: &snapshot.raw_json,
+        };
+        return match crate::gha_evidence::collect_sql(request).await {
+            Ok(_) => (
+                SuiteResult {
+                    state: SuiteState::Completed,
+                    status: Some(status.clone()),
+                    execution: Some(execution),
+                    summary: Some(PathBuf::from(format!(
+                        "providers/github-actions/runs/{run_id}/attempts/{attempt}/test_sql/summary.json"
+                    ))),
+                },
+                None,
+            ),
+            Err(error) => failed_suite_with_identity(suite, status.clone(), execution, error),
+        };
+    }
     let state = if status.state.eq_ignore_ascii_case("pending") {
         SuiteState::Running
     } else {
@@ -342,7 +397,8 @@ fn select_suite(
         SuiteResult {
             state,
             status: Some(status.clone()),
-            execution: Some(ExecutionIdentity { run_id, attempt }),
+            execution: Some(execution),
+            summary: None,
         },
         None,
     )
@@ -354,12 +410,35 @@ fn failed_suite(suite: Suite, error: AppError) -> (SuiteResult, Option<CollectIs
             state: SuiteState::CollectionFailed,
             status: None,
             execution: None,
+            summary: None,
         },
         Some(CollectIssue {
             suite: suite.job_name().to_owned(),
             kind: error.kind().as_str().to_owned(),
             message: error.to_string(),
         }),
+    )
+}
+
+fn failed_suite_with_identity(
+    suite: Suite,
+    status: StatusIdentity,
+    execution: ExecutionIdentity,
+    error: AppError,
+) -> (SuiteResult, Option<CollectIssue>) {
+    let issue = CollectIssue {
+        suite: suite.job_name().to_owned(),
+        kind: error.kind().as_str().to_owned(),
+        message: error.to_string(),
+    };
+    (
+        SuiteResult {
+            state: SuiteState::CollectionFailed,
+            status: Some(status),
+            execution: Some(execution),
+            summary: None,
+        },
+        Some(issue),
     )
 }
 
@@ -414,6 +493,8 @@ struct StatusSnapshot {
     pr: StatusPr,
     #[serde(default)]
     checks: Vec<StatusCheck>,
+    #[serde(skip)]
+    raw_json: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]

@@ -1,0 +1,77 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/command-result-v2.schema.json",
+  "title": "cubrid-ci command result v2",
+  "type": "object",
+  "required": ["schema_version", "ok", "repository", "pr", "commit", "collected_at", "output_dir", "suites", "errors"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "ok": { "type": "boolean" },
+    "repository": { "const": "CUBRID/cubrid" },
+    "pr": {
+      "type": "object",
+      "required": ["number", "url", "title", "head_sha"],
+      "properties": {
+        "number": { "type": "integer", "minimum": 1 },
+        "url": { "type": "string", "format": "uri" },
+        "title": { "type": "string" },
+        "head_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" }
+      },
+      "additionalProperties": false
+    },
+    "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+    "collected_at": { "type": "string", "format": "date-time" },
+    "output_dir": { "type": "string" },
+    "suites": {
+      "type": "object",
+      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell"] },
+      "additionalProperties": { "$ref": "#/$defs/suite" },
+      "minProperties": 1
+    },
+    "errors": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["suite", "kind", "message"],
+        "properties": {
+          "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+          "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
+          "message": { "type": "string" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "$defs": {
+    "suite": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["running", "not_observed", "evidence_pending", "completed", "collection_failed"] },
+        "status": {
+          "type": "object",
+          "required": ["state", "reported_for_sha", "detail_url", "reported_at"],
+          "properties": {
+            "state": { "type": "string" },
+            "reported_for_sha": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+            "detail_url": { "type": "string", "format": "uri" },
+            "reported_at": { "type": "string", "format": "date-time" }
+          },
+          "additionalProperties": false
+        },
+        "execution": {
+          "type": "object",
+          "required": ["run_id", "attempt"],
+          "properties": {
+            "run_id": { "type": "integer", "minimum": 1 },
+            "attempt": { "type": "integer", "minimum": 1 }
+          },
+          "additionalProperties": false
+        },
+        "summary": { "type": "string" }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

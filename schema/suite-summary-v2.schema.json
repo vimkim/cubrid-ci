@@ -1,0 +1,33 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/suite-summary-v2.schema.json",
+  "title": "CUBRID CI suite summary v2",
+  "type": "object",
+  "required": ["schema_version", "suite", "ci_state", "collection_state", "run_id", "attempt", "artifact_base", "verdict", "counts", "shards", "failures"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+    "ci_state": { "enum": ["success", "failure"] },
+    "collection_state": { "const": "complete" },
+    "run_id": { "type": "integer", "minimum": 1 },
+    "attempt": { "type": "integer", "minimum": 1 },
+    "artifact_base": { "type": "string", "format": "uri" },
+    "verdict": { "enum": ["pass", "fail"] },
+    "counts": {
+      "type": "object",
+      "required": ["planned", "tests", "passed", "failures", "errors", "skipped"],
+      "properties": {
+        "planned": { "type": "integer", "minimum": 0 },
+        "tests": { "type": "integer", "minimum": 0 },
+        "passed": { "type": "integer", "minimum": 0 },
+        "failures": { "type": "integer", "minimum": 0 },
+        "errors": { "type": "integer", "minimum": 0 },
+        "skipped": { "type": "integer", "minimum": 0 }
+      },
+      "additionalProperties": false
+    },
+    "shards": { "type": "array", "minItems": 1, "items": { "type": "object" } },
+    "failures": { "type": "array", "items": { "type": "object" } }
+  },
+  "additionalProperties": false
+}
