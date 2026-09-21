@@ -40,6 +40,14 @@ async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
     assert_eq!(result["suites"]["test_shell"]["status"]["state"], "FAILURE");
     assert_eq!(result["suites"]["test_shell"]["execution"]["run_id"], 300);
     assert_eq!(result["suites"]["test_shell"]["execution"]["attempt"], 3);
+    let gh_calls = fs::read_to_string(commands.path().join("gh-calls")).unwrap();
+    let first_download = gh_calls.find("actions/runs/200/jobs").unwrap();
+    for run in ["actions/runs/200", "actions/runs/123", "actions/runs/300"] {
+        assert!(
+            gh_calls.find(run).unwrap() < first_download,
+            "{run} was not pinned before evidence download:\n{gh_calls}"
+        );
+    }
 
     let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
     for suite in ["test_medium", "test_shell"] {
@@ -93,7 +101,8 @@ fn write_commands(commands: &Path, server: &MockServer) {
         commands,
         "gh",
         &format!(
-            r#"case "$*" in
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
   *actions/runs/200/jobs*) printf '%s\n' '{{"jobs":[{{"id":920,"name":"collect","run_attempt":1}}]}}' ;;
   *actions/runs/300/jobs*) printf '%s\n' '{{"jobs":[{{"id":930,"name":"collect","run_attempt":3}}]}}' ;;
   *actions/jobs/920/logs*|*actions/jobs/930/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
@@ -102,6 +111,7 @@ fn write_commands(commands: &Path, server: &MockServer) {
   *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
   *) exit 64 ;;
 esac"#,
+            commands.join("gh-calls").display(),
             server.uri()
         ),
     );

@@ -50,6 +50,7 @@ pub enum SuiteState {
     Running,
     NotObserved,
     Completed,
+    JobLevelFailure,
     CollectionFailed,
 }
 
@@ -120,6 +121,7 @@ impl SuiteState {
             Self::Running => "running",
             Self::NotObserved => "not_observed",
             Self::Completed => "completed",
+            Self::JobLevelFailure => "job_level_failure",
             Self::CollectionFailed => "collection_failed",
         }
     }
@@ -128,19 +130,34 @@ impl SuiteState {
 pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
     let explicit = args.pr.is_some();
     let selected_commit = select_commit(args)?;
-    let snapshot = status_snapshot(args.pr.as_deref())?;
+    let mut snapshot = status_snapshot(args.pr.as_deref())?;
     validate_snapshot(&snapshot, args.pr.as_deref(), &selected_commit, explicit)?;
 
-    let config = ResolvedConfig::load(ConfigOverride {
-        data_dir: args.data_dir.clone(),
-        artifact_base: args.artifact_base.clone(),
-    })?;
     let requested_suites = if args.suite.is_empty() {
         Suite::ALL.to_vec()
     } else {
         args.suite.clone()
     };
+    if args.wait {
+        let deadline = tokio::time::Instant::now() + args.timeout;
+        while !requested_suites
+            .iter()
+            .all(|suite| suite_is_terminal(&snapshot, *suite, &selected_commit))
+        {
+            let now = tokio::time::Instant::now();
+            if now >= deadline {
+                break;
+            }
+            tokio::time::sleep(args.poll_interval.min(deadline - now)).await;
+            snapshot = status_snapshot(args.pr.as_deref())?;
+            validate_snapshot(&snapshot, args.pr.as_deref(), &selected_commit, explicit)?;
+        }
+    }
 
+    let config = ResolvedConfig::load(ConfigOverride {
+        data_dir: args.data_dir.clone(),
+        artifact_base: args.artifact_base.clone(),
+    })?;
     let output_dir = config
         .data_dir
         .join("github-actions/CUBRID-cubrid")
@@ -148,11 +165,16 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
         .join(&selected_commit);
     let mut suites = BTreeMap::new();
     let mut errors = Vec::new();
-    for suite in requested_suites {
+    let pinned_executions = requested_suites
+        .iter()
+        .map(|suite| pin_execution(&snapshot, *suite, &selected_commit))
+        .collect::<Vec<_>>();
+    for (suite, pinned_execution) in requested_suites.into_iter().zip(pinned_executions) {
         let (suite_result, issue) = select_suite(
             &snapshot,
             suite,
             &selected_commit,
+            pinned_execution,
             config.artifact_base.as_ref(),
             &output_dir,
         )
@@ -175,14 +197,55 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
             title: snapshot.pr.title,
             head_sha: snapshot.pr.head_sha,
         },
-        commit: selected_commit,
+        commit: selected_commit.clone(),
         collected_at: Utc::now(),
         output_dir: output_dir.clone(),
         suites,
         errors,
     };
+    let final_snapshot = status_snapshot(args.pr.as_deref())?;
+    validate_snapshot(
+        &final_snapshot,
+        args.pr.as_deref(),
+        &selected_commit,
+        explicit,
+    )?;
     write_json_atomic(&output_dir.join("manifest.json"), &result)?;
     Ok(result)
+}
+
+fn pin_execution(
+    snapshot: &StatusSnapshot,
+    suite: Suite,
+    commit: &str,
+) -> Option<Result<ExecutionIdentity, AppError>> {
+    let name = format!("gha-ci: {}", suite.job_name());
+    let check = snapshot
+        .checks
+        .iter()
+        .find(|check| check.name == name && check.provider == "GitHub Actions")?;
+    let status = check.current.as_ref()?;
+    if check.freshness != "current" || !status.reported_for_sha.eq_ignore_ascii_case(commit) {
+        return Some(Err(AppError::Integrity(
+            "suite status does not identify the selected commit".to_owned(),
+        )));
+    }
+    Some(actions_run_id(&status.detail_url).and_then(|run_id| {
+        current_attempt(run_id).map(|attempt| ExecutionIdentity { run_id, attempt })
+    }))
+}
+
+fn suite_is_terminal(snapshot: &StatusSnapshot, suite: Suite, commit: &str) -> bool {
+    let name = format!("gha-ci: {}", suite.job_name());
+    snapshot.checks.iter().any(|check| {
+        check.name == name
+            && check.provider == "GitHub Actions"
+            && check.freshness == "current"
+            && check.current.as_ref().is_some_and(|status| {
+                status.reported_for_sha.eq_ignore_ascii_case(commit)
+                    && !status.state.eq_ignore_ascii_case("pending")
+            })
+    })
 }
 
 fn select_commit(args: &CollectArgs) -> Result<String, AppError> {
@@ -316,6 +379,7 @@ async fn select_suite(
     snapshot: &StatusSnapshot,
     suite: Suite,
     commit: &str,
+    pinned_execution: Option<Result<ExecutionIdentity, AppError>>,
     artifact_base: Option<&Url>,
     evidence_dir: &std::path::Path,
 ) -> (SuiteResult, Option<CollectIssue>) {
@@ -352,15 +416,18 @@ async fn select_suite(
             AppError::Integrity("suite status does not identify the selected commit".to_owned()),
         );
     }
-    let run_id = match actions_run_id(&status.detail_url) {
-        Ok(run_id) => run_id,
-        Err(error) => return failed_suite(suite, error),
+    let execution = match pinned_execution {
+        Some(Ok(execution)) => execution,
+        Some(Err(error)) => return failed_suite(suite, error),
+        None => {
+            return failed_suite(
+                suite,
+                AppError::Integrity("suite execution was not pinned before download".to_owned()),
+            );
+        }
     };
-    let attempt = match current_attempt(run_id) {
-        Ok(attempt) => attempt,
-        Err(error) => return failed_suite(suite, error),
-    };
-    let execution = ExecutionIdentity { run_id, attempt };
+    let run_id = execution.run_id;
+    let attempt = execution.attempt;
     if !status.state.eq_ignore_ascii_case("pending") {
         let request = crate::gha_evidence::SuiteRequest {
             suite,
@@ -423,9 +490,14 @@ async fn select_suite(
 }
 
 fn failed_suite(suite: Suite, error: AppError) -> (SuiteResult, Option<CollectIssue>) {
+    let state = if matches!(&error, AppError::JobLevel(_)) {
+        SuiteState::JobLevelFailure
+    } else {
+        SuiteState::CollectionFailed
+    };
     (
         SuiteResult {
-            state: SuiteState::CollectionFailed,
+            state,
             status: None,
             execution: None,
             summary: None,
@@ -444,6 +516,11 @@ fn failed_suite_with_identity(
     execution: ExecutionIdentity,
     error: AppError,
 ) -> (SuiteResult, Option<CollectIssue>) {
+    let state = if matches!(&error, AppError::JobLevel(_)) {
+        SuiteState::JobLevelFailure
+    } else {
+        SuiteState::CollectionFailed
+    };
     let issue = CollectIssue {
         suite: suite.job_name().to_owned(),
         kind: error.kind().as_str().to_owned(),
@@ -451,7 +528,7 @@ fn failed_suite_with_identity(
     };
     (
         SuiteResult {
-            state: SuiteState::CollectionFailed,
+            state,
             status: Some(status),
             execution: Some(execution),
             summary: None,

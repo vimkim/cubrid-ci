@@ -146,6 +146,31 @@ fn actions_api_failure_publishes_remote_failure() {
     assert_eq!(fixture.manifest(), result);
 }
 
+#[test]
+fn wait_timeout_is_nonzero_and_preserves_the_running_execution() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+
+    let output = fixture
+        .command(&[
+            "--suite",
+            "test_medium",
+            "--wait",
+            "--timeout",
+            "2ms",
+            "--poll-interval",
+            "1ms",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["ok"], false);
+    assert_eq!(result["suites"]["test_medium"]["state"], "running");
+    assert_eq!(result["suites"]["test_medium"]["execution"]["run_id"], 123);
+    assert_eq!(fixture.manifest(), result);
+}
+
 struct Fixture {
     commands: tempfile::TempDir,
     worktree: tempfile::TempDir,

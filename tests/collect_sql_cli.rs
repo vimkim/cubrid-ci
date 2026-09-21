@@ -237,6 +237,305 @@ async fn swapped_testcase_identity_is_an_integrity_failure() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn wait_refreshes_status_then_pins_the_terminal_execution() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    let counter = commands.path().join("status-count");
+    write_status_sequence(
+        commands.path(),
+        &counter,
+        &status_snapshot_with("PENDING", SHA, 123),
+        &status_snapshot_with("FAILURE", SHA, 123),
+    );
+    write_gh_command(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path())
+        .args(["--wait", "--timeout", "1s", "--poll-interval", "1ms"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        fs::read_to_string(counter)
+            .unwrap()
+            .trim()
+            .parse::<u64>()
+            .unwrap()
+            >= 3
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["execution"]["run_id"], 123);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn a_newer_same_commit_run_does_not_change_the_pinned_download() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    let counter = commands.path().join("status-count");
+    write_status_sequence(
+        commands.path(),
+        &counter,
+        &status_snapshot_with("FAILURE", SHA, 123),
+        &status_snapshot_with("FAILURE", SHA, 999),
+    );
+    write_gh_command(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["execution"]["run_id"], 123);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn moved_pr_head_rejects_publication_but_keeps_downloaded_evidence() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    let counter = commands.path().join("status-count");
+    write_status_sequence(
+        commands.path(),
+        &counter,
+        &status_snapshot_with("FAILURE", SHA, 123),
+        &status_snapshot_with("FAILURE", "2222222222222222222222222222222222222222", 999),
+    );
+    write_gh_command(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(error["kind"], "integrity");
+    let root = data
+        .path()
+        .join(format!("github-actions/CUBRID-cubrid/pr-7990/{SHA}"));
+    assert!(!root.join("manifest.json").exists());
+    assert!(
+        root.join("providers/github-actions/runs/123/attempts/2/test_sql/summary.json")
+            .exists()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_plan_job_is_retained_as_job_level_failure() {
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    write_command(
+        commands.path(),
+        "gh",
+        r#"case "$*" in
+  *actions/runs/123/jobs*) printf '%s\n' '{"jobs":[{"id":901,"name":"plan / test_sql","run_attempt":2,"conclusion":"failure"}]}' ;;
+  *actions/jobs/901/logs*) printf '%s\n' 'planner failed before publishing evidence' ;;
+  *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
+  *) exit 64 ;;
+esac"#,
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "job_level_failure");
+    assert_eq!(result["errors"][0]["kind"], "unavailable");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        output_dir
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/raw/github/job-901.log")
+            .exists()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unrelated_attempt_and_suite_failures_do_not_reclassify_a_transport_error() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/collect/verdict"))
+        .respond_with(ResponseTemplate::new(500))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    write_command(
+        commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":901,"name":"plan / test_sql","run_attempt":1,"conclusion":"failure"}},{{"id":902,"name":"shard shell 09","run_attempt":2,"conclusion":"failure"}},{{"id":900,"name":"collect","run_attempt":2,"conclusion":"failure"}}]}}' ;;
+  *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
+  *actions/jobs/901/logs*|*actions/jobs/902/logs*) exit 73 ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            server.uri()
+        ),
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "collection_failed");
+    assert_eq!(result["errors"][0]["kind"], "remote");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        !output_dir
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/raw/github/job-901-log-error.txt")
+            .exists()
+    );
+    assert!(
+        !output_dir
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/raw/github/job-902-log-error.txt")
+            .exists()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn collect_job_can_be_discovered_on_a_later_jobs_page() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    write_command(
+        commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *actions/runs/123/jobs*page=2*) printf '%s\n' '{{"total_count":2,"jobs":[{{"id":900,"name":"collect","run_attempt":2,"conclusion":"success"}}]}}' ;;
+  *actions/runs/123/jobs*page=1*) printf '%s\n' '{{"total_count":2,"jobs":[{{"id":899,"name":"plan / test_sql","run_attempt":2,"conclusion":"success"}}]}}' ;;
+  *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            server.uri()
+        ),
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        output_dir
+            .join(
+                "providers/github-actions/runs/123/attempts/2/test_sql/raw/github/jobs-page-2.json"
+            )
+            .exists()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failed_collect_job_with_unavailable_log_is_job_level_failure() {
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    write_command(
+        commands.path(),
+        "gh",
+        r#"case "$*" in
+  *actions/runs/123/jobs*) printf '%s\n' '{"jobs":[{"id":900,"name":"collect","run_attempt":2,"conclusion":"cancelled"}]}' ;;
+  *actions/jobs/900/logs*) exit 73 ;;
+  *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
+  *) exit 64 ;;
+esac"#,
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "job_level_failure");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        output_dir
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/raw/github/job-900-log-error.txt")
+            .exists()
+    );
+}
+
 fn write_ci_commands(commands: &Path, server: &MockServer) {
     write_command(
         commands,
@@ -246,6 +545,10 @@ fn write_ci_commands(commands: &Path, server: &MockServer) {
             serde_json::to_string(&status_snapshot()).unwrap()
         ),
     );
+    write_gh_command(commands, server);
+}
+
+fn write_gh_command(commands: &Path, server: &MockServer) {
     write_command(
         commands,
         "gh",
@@ -259,6 +562,24 @@ esac"#,
             server.uri()
         ),
     );
+}
+
+fn write_status_sequence(commands: &Path, counter: &Path, first: &Value, later: &Value) {
+    let behavior = format!(
+        "count=0\n\
+         if [ -f '{counter}' ]; then count=$(/bin/cat '{counter}'); fi\n\
+         count=$((count + 1))\n\
+         printf '%s\\n' \"$count\" > '{counter}'\n\
+         if [ \"$count\" -eq 1 ]; then\n\
+           printf '%s\\n' '{first}'\n\
+         else\n\
+           printf '%s\\n' '{later}'\n\
+         fi",
+        counter = counter.display(),
+        first = serde_json::to_string(first).unwrap(),
+        later = serde_json::to_string(later).unwrap(),
+    );
+    write_command(commands, "cubrid-pr-status", &behavior);
 }
 
 fn command(commands: &Path, data: &Path) -> Command {
@@ -283,6 +604,10 @@ fn command(commands: &Path, data: &Path) -> Command {
 }
 
 fn status_snapshot() -> Value {
+    status_snapshot_with("FAILURE", SHA, 123)
+}
+
+fn status_snapshot_with(state: &str, head_sha: &str, run_id: u64) -> Value {
     json!({
         "schema_version": 1,
         "repository": "CUBRID/cubrid",
@@ -292,7 +617,7 @@ fn status_snapshot() -> Value {
             "number": 7990,
             "title": "[CBRD-26357] Add out-of-row overflow storage",
             "url": "https://github.com/CUBRID/cubrid/pull/7990",
-            "head_sha": SHA,
+            "head_sha": head_sha,
             "state": "OPEN"
         },
         "checks": [{
@@ -301,9 +626,9 @@ fn status_snapshot() -> Value {
             "expected": true,
             "freshness": "current",
             "current": {
-                "state": "FAILURE",
-                "reported_for_sha": SHA,
-                "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/123",
+                "state": state,
+                "reported_for_sha": head_sha,
+                "detail_url": format!("https://github.com/CUBRID/cubrid/actions/runs/{run_id}"),
                 "reported_at": "2026-09-21T18:10:04Z"
             },
             "previous": null

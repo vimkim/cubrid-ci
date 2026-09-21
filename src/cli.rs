@@ -93,6 +93,18 @@ pub struct CollectArgs {
     /// Internal CI evidence-server base URL.
     #[arg(long)]
     pub artifact_base: Option<String>,
+
+    /// Poll the selected commit until every requested suite is terminal.
+    #[arg(long)]
+    pub wait: bool,
+
+    /// Maximum time to wait for requested suites.
+    #[arg(long, default_value = "26h", value_parser = parse_duration)]
+    pub timeout: Duration,
+
+    /// Delay between status snapshot polls while waiting.
+    #[arg(long, default_value = "60s", value_parser = parse_duration)]
+    pub poll_interval: Duration,
 }
 
 #[derive(Debug, Clone, Args)]

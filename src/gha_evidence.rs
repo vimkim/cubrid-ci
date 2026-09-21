@@ -185,12 +185,14 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         &provider_raw.join("github/run.json"),
         &String::from_utf8_lossy(&run_json),
     )?;
-    let artifact_base = resolve_artifact_base(
+    let resolution = resolve_artifact_base(
         request.run_id,
         request.attempt,
+        layout.remote_name,
         request.artifact_base,
         &provider_raw,
     )?;
+    let artifact_base = resolution.base;
     validate_artifact_base(&artifact_base)?;
     let client = Client::builder()
         .build()
@@ -199,20 +201,32 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         .join(&format!("runs/{}/{}/", request.run_id, layout.remote_name))
         .map_err(|error| AppError::Remote(format!("construct evidence URL: {error}")))?;
 
-    let split_meta = fetch_text(
-        &client,
-        run_root.join("plan/split.meta").unwrap(),
-        MAX_INDEX_BYTES,
-    )
-    .await?;
+    let split_meta = classify_pipeline_fetch(
+        fetch_text(
+            &client,
+            run_root.join("plan/split.meta").unwrap(),
+            MAX_INDEX_BYTES,
+        )
+        .await,
+        &resolution.jobs,
+        &provider_raw,
+        "plan metadata",
+        false,
+    )?;
     let plan = parse_split_meta(&split_meta)?;
     write_string_atomic(&provider_raw.join("plan/split.meta"), &split_meta)?;
-    let planned_index = fetch_text(
-        &client,
-        run_root.join("plan/shards/").unwrap(),
-        MAX_INDEX_BYTES,
-    )
-    .await?;
+    let planned_index = classify_pipeline_fetch(
+        fetch_text(
+            &client,
+            run_root.join("plan/shards/").unwrap(),
+            MAX_INDEX_BYTES,
+        )
+        .await,
+        &resolution.jobs,
+        &provider_raw,
+        "planned-shard index",
+        false,
+    )?;
     write_string_atomic(
         &provider_raw.join("indexes/planned-shards.html"),
         &planned_index,
@@ -221,12 +235,18 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         .into_iter()
         .filter_map(|name| name.strip_suffix(".list").map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    let plan_table_text = fetch_text(
-        &client,
-        run_root.join("plan/plan.tsv").unwrap(),
-        MAX_TEXT_BYTES,
-    )
-    .await?;
+    let plan_table_text = classify_pipeline_fetch(
+        fetch_text(
+            &client,
+            run_root.join("plan/plan.tsv").unwrap(),
+            MAX_TEXT_BYTES,
+        )
+        .await,
+        &resolution.jobs,
+        &provider_raw,
+        "plan table",
+        false,
+    )?;
     write_string_atomic(&provider_raw.join("plan/plan.tsv"), &plan_table_text)?;
     let plan_table = parse_plan_table(&plan_table_text)?;
     if plan_table.values().sum::<u64>() != plan.total {
@@ -235,38 +255,60 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         ));
     }
 
-    let failed_list = fetch_text(
-        &client,
-        run_root.join("collect/failed.list").unwrap(),
-        MAX_TEXT_BYTES,
-    )
-    .await?;
-    let verdict = fetch_text(
-        &client,
-        run_root.join("collect/verdict").unwrap(),
-        MAX_INDEX_BYTES,
-    )
-    .await?;
+    let failed_list = classify_pipeline_fetch(
+        fetch_text(
+            &client,
+            run_root.join("collect/failed.list").unwrap(),
+            MAX_TEXT_BYTES,
+        )
+        .await,
+        &resolution.jobs,
+        &provider_raw,
+        "collector failure inventory",
+        true,
+    )?;
+    let verdict = classify_pipeline_fetch(
+        fetch_text(
+            &client,
+            run_root.join("collect/verdict").unwrap(),
+            MAX_INDEX_BYTES,
+        )
+        .await,
+        &resolution.jobs,
+        &provider_raw,
+        "collector verdict",
+        true,
+    )?;
     write_string_atomic(&provider_raw.join("collect/failed.list"), &failed_list)?;
     write_string_atomic(&provider_raw.join("collect/verdict"), &verdict)?;
 
-    let shard_index =
-        fetch_text(&client, run_root.join("shard/").unwrap(), MAX_INDEX_BYTES).await?;
+    let shard_index = classify_pipeline_fetch(
+        fetch_text(&client, run_root.join("shard/").unwrap(), MAX_INDEX_BYTES).await,
+        &resolution.jobs,
+        &provider_raw,
+        "published-shard index",
+        true,
+    )?;
     write_string_atomic(&provider_raw.join("indexes/shards.html"), &shard_index)?;
     let shard_names = directory_entries(&shard_index, true)?;
     if shard_names.is_empty() {
-        return Err(AppError::Integrity(format!(
-            "terminal {} suite has no shard directories",
-            request.suite
-        )));
+        return job_level_failure(
+            format!("terminal {} suite has no shard directories", request.suite),
+            &resolution.jobs,
+            &provider_raw,
+        );
     }
     if shard_names != planned_shards || shard_names.len() as u64 != plan.parallelism {
-        return Err(AppError::Integrity(format!(
-            "planned {} shards ({}) do not match published shards ({})",
-            request.suite,
-            planned_shards.len(),
-            shard_names.len()
-        )));
+        return job_level_failure(
+            format!(
+                "planned {} shards ({}) do not match published shards ({})",
+                request.suite,
+                planned_shards.len(),
+                shard_names.len()
+            ),
+            &resolution.jobs,
+            &provider_raw,
+        );
     }
     if plan_table.keys().cloned().collect::<Vec<_>>() != planned_shards {
         return Err(AppError::Integrity(
@@ -299,18 +341,30 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
 
     for shard in shard_names {
         let shard_root = run_root.join(&format!("shard/{shard}/")).unwrap();
-        let build_text = fetch_text(
-            &client,
-            shard_root.join("build.read").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await?;
-        let testcase_text = fetch_text(
-            &client,
-            shard_root.join("tc.read").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await?;
+        let build_text = classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                shard_root.join("build.read").unwrap(),
+                MAX_INDEX_BYTES,
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            &format!("shard {shard} build provenance"),
+            false,
+        )?;
+        let testcase_text = classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                shard_root.join("tc.read").unwrap(),
+                MAX_INDEX_BYTES,
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            &format!("shard {shard} testcase provenance"),
+            false,
+        )?;
         write_string_atomic(
             &provider_raw.join(format!("shards/{shard}/build.read")),
             &build_text,
@@ -359,18 +413,30 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             )));
         }
 
-        let workflow_result = fetch_text(
-            &client,
-            shard_root.join(layout.result_file).unwrap(),
-            MAX_TEXT_BYTES,
-        )
-        .await?;
-        let shard_done = fetch_text(
-            &client,
-            shard_root.join("shard.done").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await?;
+        let workflow_result = classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                shard_root.join(layout.result_file).unwrap(),
+                MAX_TEXT_BYTES,
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            &format!("shard {shard} workflow result"),
+            true,
+        )?;
+        let shard_done = classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                shard_root.join("shard.done").unwrap(),
+                MAX_INDEX_BYTES,
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            &format!("shard {shard} completion record"),
+            true,
+        )?;
         write_string_atomic(
             &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
             &workflow_result,
@@ -379,7 +445,13 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             &provider_raw.join(format!("shards/{shard}/shard.done")),
             &shard_done,
         )?;
-        let assigned = validate_shard_done(&shard_done, &shard, layout.remote_name)?;
+        let assigned = match validate_shard_done(&shard_done, &shard, layout.remote_name) {
+            Ok(assigned) => assigned,
+            Err(AppError::JobLevel(message)) => {
+                return job_level_failure(message, &resolution.jobs, &provider_raw);
+            }
+            Err(error) => return Err(error),
+        };
         let planned = plan_table
             .get(&shard)
             .copied()
@@ -394,21 +466,31 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
         };
         if shard_counts.passed + shard_counts.failed + shard_counts.skipped != planned {
-            return Err(AppError::Integrity(format!(
-                "shard {shard} handled {} cases but was assigned {planned}",
-                shard_counts.passed + shard_counts.failed + shard_counts.skipped
-            )));
+            return job_level_failure(
+                format!(
+                    "shard {shard} handled {} cases but was assigned {planned}",
+                    shard_counts.passed + shard_counts.failed + shard_counts.skipped
+                ),
+                &resolution.jobs,
+                &provider_raw,
+            );
         }
         workflow_passed += shard_counts.passed;
         workflow_failed += shard_counts.failed;
         workflow_skipped += shard_counts.skipped;
 
-        let results_index = fetch_text(
-            &client,
-            shard_root.join("test-results/").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await?;
+        let results_index = classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                shard_root.join("test-results/").unwrap(),
+                MAX_INDEX_BYTES,
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            &format!("shard {shard} test-result index"),
+            true,
+        )?;
         write_string_atomic(
             &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
             &results_index,
@@ -418,10 +500,11 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             .filter(|name| name.ends_with(".xml"))
             .collect::<Vec<_>>();
         if junit_files.is_empty() {
-            return Err(AppError::Integrity(format!(
-                "shard {shard} has no {} JUnit XML",
-                request.suite
-            )));
+            return job_level_failure(
+                format!("shard {shard} has no {} JUnit XML", request.suite),
+                &resolution.jobs,
+                &provider_raw,
+            );
         }
 
         let mut junit_shard_counts = WorkflowCounts::default();
@@ -625,38 +708,60 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
     Ok(summary)
 }
 
+struct EvidenceResolution {
+    base: Url,
+    jobs: Vec<ActionJob>,
+}
+
 fn resolve_artifact_base(
     run_id: u64,
     attempt: u64,
+    suite: &str,
     configured: Option<&Url>,
     provider_raw: &Path,
-) -> Result<Url, AppError> {
-    let jobs_endpoint =
-        format!("repos/CUBRID/cubrid/actions/runs/{run_id}/jobs?filter=all&per_page=100");
-    let jobs_json = gh_output(&jobs_endpoint)?;
-    write_string_atomic(
-        &provider_raw.join("github/jobs.json"),
-        &String::from_utf8_lossy(&jobs_json),
-    )?;
-    let jobs: JobsResponse =
-        serde_json::from_slice(&jobs_json).map_err(|source| AppError::Json {
-            endpoint: jobs_endpoint,
-            source,
-        })?;
-    let job = jobs
-        .jobs
+) -> Result<EvidenceResolution, AppError> {
+    let jobs = load_jobs(run_id, provider_raw)?;
+    let selected_jobs = jobs
         .into_iter()
-        .find(|job| job.name == "collect" && job.run_attempt == attempt)
-        .ok_or_else(|| {
-            AppError::Unavailable(format!(
+        .filter(|job| job.run_attempt == attempt)
+        .collect::<Vec<_>>();
+    let diagnostic_jobs = selected_jobs
+        .iter()
+        .filter(|job| job_is_relevant_to_suite(job, suite))
+        .cloned()
+        .collect::<Vec<_>>();
+    let collect_job = selected_jobs
+        .iter()
+        .find(|job| job.name == "collect")
+        .map(Ok)
+        .unwrap_or_else(|| {
+            retain_abnormal_job_logs(&diagnostic_jobs, provider_raw)?;
+            Err(AppError::JobLevel(format!(
                 "Actions run {run_id} attempt {attempt} has no collect job"
-            ))
+            )))
         })?;
     if let Some(configured) = configured {
-        return Ok(configured.clone());
+        return Ok(EvidenceResolution {
+            base: configured.clone(),
+            jobs: diagnostic_jobs,
+        });
     }
-    let logs_endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{}/logs", job.id);
-    let output = gh_job_log(&logs_endpoint)?;
+    let collect_job_id = collect_job.id;
+    let logs_endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{collect_job_id}/logs");
+    let output = match gh_job_log(&logs_endpoint) {
+        Ok(output) => output,
+        Err(error) if job_is_abnormal(collect_job) => {
+            write_string_atomic(
+                &provider_raw.join(format!("github/job-{collect_job_id}-log-error.txt")),
+                &error.to_string(),
+            )?;
+            return Err(AppError::JobLevel(format!(
+                "collect job ended {} and its log is unavailable: {error}",
+                collect_job.conclusion.as_deref().unwrap_or("abnormally")
+            )));
+        }
+        Err(error) => return Err(error),
+    };
     write_string_atomic(
         &provider_raw.join("github/collect.log"),
         &String::from_utf8_lossy(&output),
@@ -666,10 +771,18 @@ fn resolve_artifact_base(
     let capture = Regex::new(r"(?m)ARTIFACT_URL_BASE(?::|=)\s*(https?://[^\s]+)")
         .expect("valid artifact URL regex")
         .captures(&log)
-        .and_then(|capture| capture.get(1))
-        .ok_or_else(|| {
-            AppError::Unavailable("collect-job log contains no evidence-server URL".to_owned())
-        })?;
+        .and_then(|capture| capture.get(1));
+    let Some(capture) = capture else {
+        if job_is_abnormal(collect_job) {
+            return Err(AppError::JobLevel(format!(
+                "collect job ended {} without publishing an evidence-server URL",
+                collect_job.conclusion.as_deref().unwrap_or("abnormally")
+            )));
+        }
+        return Err(AppError::Unavailable(
+            "collect-job log contains no evidence-server URL".to_owned(),
+        ));
+    };
     let value = capture.as_str().trim_end_matches([')', ']', ',', ';']);
     let mut url = Url::parse(value).map_err(|error| {
         AppError::Remote(format!("invalid evidence-server URL in log: {error}"))
@@ -677,7 +790,136 @@ fn resolve_artifact_base(
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    Ok(url)
+    Ok(EvidenceResolution {
+        base: url,
+        jobs: diagnostic_jobs,
+    })
+}
+
+fn load_jobs(run_id: u64, provider_raw: &Path) -> Result<Vec<ActionJob>, AppError> {
+    let mut all_jobs = Vec::new();
+    let mut page = 1_u64;
+    loop {
+        let endpoint = format!(
+            "repos/CUBRID/cubrid/actions/runs/{run_id}/jobs?filter=all&per_page=100&page={page}"
+        );
+        let json = gh_output(&endpoint)?;
+        let name = if page == 1 {
+            "jobs.json".to_owned()
+        } else {
+            format!("jobs-page-{page}.json")
+        };
+        write_string_atomic(
+            &provider_raw.join("github").join(name),
+            &String::from_utf8_lossy(&json),
+        )?;
+        let response: JobsResponse =
+            serde_json::from_slice(&json).map_err(|source| AppError::Json { endpoint, source })?;
+        let page_count = response.jobs.len();
+        all_jobs.extend(response.jobs);
+        let complete = response
+            .total_count
+            .is_none_or(|total| all_jobs.len() as u64 >= total);
+        if complete || page_count == 0 {
+            break;
+        }
+        page += 1;
+        if page > 100 {
+            return Err(AppError::Remote(
+                "Actions job listing exceeds 10,000 records".to_owned(),
+            ));
+        }
+    }
+    Ok(all_jobs)
+}
+
+fn classify_pipeline_fetch(
+    result: Result<String, AppError>,
+    jobs: &[ActionJob],
+    provider_raw: &Path,
+    stage: &str,
+    terminal_required: bool,
+) -> Result<String, AppError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(error)
+            if jobs.iter().any(job_is_abnormal)
+                || (terminal_required && matches!(&error, AppError::Unavailable(_))) =>
+        {
+            retain_abnormal_job_logs(jobs, provider_raw)?;
+            let failed = jobs
+                .iter()
+                .filter(|job| job_is_abnormal(job))
+                .map(|job| {
+                    format!(
+                        "{} ({})",
+                        job.name,
+                        job.conclusion.as_deref().unwrap_or("unknown")
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            let context = if failed.is_empty() {
+                "the terminal suite published no trustworthy collector output".to_owned()
+            } else {
+                format!("abnormal Actions jobs: {failed}")
+            };
+            Err(AppError::JobLevel(format!(
+                "{stage} is unavailable after {context}; {error}"
+            )))
+        }
+        Err(error) => Err(error),
+    }
+}
+
+fn job_level_failure<T>(
+    message: String,
+    jobs: &[ActionJob],
+    provider_raw: &Path,
+) -> Result<T, AppError> {
+    retain_abnormal_job_logs(jobs, provider_raw)?;
+    Err(AppError::JobLevel(message))
+}
+
+fn job_is_abnormal(job: &ActionJob) -> bool {
+    matches!(
+        job.conclusion.as_deref(),
+        Some("failure" | "cancelled" | "timed_out" | "action_required" | "startup_failure")
+    )
+}
+
+fn job_is_relevant_to_suite(job: &ActionJob, suite: &str) -> bool {
+    let name = job.name.to_ascii_lowercase();
+    let suite = suite.to_ascii_lowercase();
+    if name.starts_with(&format!("shard {suite} ")) || name == format!("status {suite}") {
+        return true;
+    }
+    if name == "gate"
+        || name == "plan"
+        || name.starts_with("plan ")
+        || name == "build status"
+        || name.starts_with("build (")
+    {
+        return true;
+    }
+    name == "collect" && job.conclusion.as_deref() != Some("failure")
+}
+
+fn retain_abnormal_job_logs(jobs: &[ActionJob], provider_raw: &Path) -> Result<(), AppError> {
+    for job in jobs.iter().filter(|job| job_is_abnormal(job)) {
+        let endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{}/logs", job.id);
+        match gh_job_log(&endpoint) {
+            Ok(log) => write_string_atomic(
+                &provider_raw.join(format!("github/job-{}.log", job.id)),
+                &String::from_utf8_lossy(&log),
+            )?,
+            Err(error) => write_string_atomic(
+                &provider_raw.join(format!("github/job-{}-log-error.txt", job.id)),
+                &error.to_string(),
+            )?,
+        }
+    }
+    Ok(())
 }
 
 fn validate_artifact_base(url: &Url) -> Result<(), AppError> {
@@ -748,6 +990,9 @@ async fn fetch_text(client: &Client, url: Url, limit: usize) -> Result<String, A
         .await
         .map_err(|error| AppError::Remote(format!("GET {url}: {error}")))?;
     if !response.status().is_success() {
+        if response.status() == reqwest::StatusCode::NOT_FOUND {
+            return Err(AppError::Unavailable(format!("GET {url} returned 404")));
+        }
         return Err(AppError::Remote(format!(
             "GET {url} returned {}",
             response.status()
@@ -1032,12 +1277,17 @@ fn validate_shard_done(
     expected_suite: &str,
 ) -> Result<u64, AppError> {
     let fields = parse_key_values(value)?;
-    if fields.get("suite") != Some(&expected_suite)
-        || fields.get("idx") != Some(&expected_index)
-        || fields.get("ctp_rc") != Some(&"0")
-    {
+    if fields.get("suite") != Some(&expected_suite) || fields.get("idx") != Some(&expected_index) {
         return Err(AppError::Integrity(format!(
-            "shard {expected_index} completion record is inconsistent or abnormal"
+            "shard {expected_index} completion record has inconsistent identity"
+        )));
+    }
+    let ctp_rc = fields
+        .get("ctp_rc")
+        .ok_or_else(|| AppError::JobLevel(format!("shard {expected_index} has no ctp_rc")))?;
+    if *ctp_rc != "0" {
+        return Err(AppError::JobLevel(format!(
+            "shard {expected_index} exited abnormally with ctp_rc={ctp_rc}"
         )));
     }
     fields
@@ -1141,14 +1391,18 @@ fn node_text(node: roxmltree::Node<'_, '_>) -> String {
 
 #[derive(Debug, Deserialize)]
 struct JobsResponse {
+    #[serde(default)]
+    total_count: Option<u64>,
     jobs: Vec<ActionJob>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 struct ActionJob {
     id: u64,
     name: String,
     run_attempt: u64,
+    #[serde(default)]
+    conclusion: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]

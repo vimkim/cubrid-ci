@@ -41,6 +41,9 @@ pub enum AppError {
     #[error("current result unavailable: {0}")]
     Unavailable(String),
 
+    #[error("CI pipeline failed before trustworthy testcase evidence: {0}")]
+    JobLevel(String),
+
     #[error("result identity mismatch: {0}")]
     Integrity(String),
 
@@ -69,7 +72,7 @@ impl AppError {
     pub const fn kind(&self) -> ExitKind {
         match self {
             Self::Input(_) => ExitKind::Input,
-            Self::Unavailable(_) => ExitKind::Unavailable,
+            Self::Unavailable(_) | Self::JobLevel(_) => ExitKind::Unavailable,
             Self::Integrity(_) => ExitKind::Integrity,
             Self::Remote(_) | Self::Json { .. } => ExitKind::Remote,
             Self::Storage { .. } | Self::Serialization(_) => ExitKind::Storage,
