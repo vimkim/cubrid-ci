@@ -171,6 +171,22 @@ fn wait_timeout_is_nonzero_and_preserves_the_running_execution() {
     assert_eq!(fixture.manifest(), result);
 }
 
+#[test]
+fn oversized_status_snapshot_is_rejected_before_json_parsing() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+    write_command(
+        fixture.commands.path(),
+        "cubrid-pr-status",
+        "/usr/bin/head -c 8388609 /dev/zero | /usr/bin/tr '\\000' x",
+    );
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["diagnostic"], "oversized");
+}
+
 struct Fixture {
     commands: tempfile::TempDir,
     worktree: tempfile::TempDir,

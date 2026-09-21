@@ -41,6 +41,15 @@ pub enum AppError {
     #[error("current result unavailable: {0}")]
     Unavailable(String),
 
+    #[error("evidence expired: {0}")]
+    Expired(String),
+
+    #[error("evidence exceeds configured limit: {0}")]
+    Oversized(String),
+
+    #[error("malformed evidence: {0}")]
+    Malformed(String),
+
     #[error("CI pipeline failed before trustworthy testcase evidence: {0}")]
     JobLevel(String),
 
@@ -72,10 +81,25 @@ impl AppError {
     pub const fn kind(&self) -> ExitKind {
         match self {
             Self::Input(_) => ExitKind::Input,
-            Self::Unavailable(_) | Self::JobLevel(_) => ExitKind::Unavailable,
-            Self::Integrity(_) => ExitKind::Integrity,
-            Self::Remote(_) | Self::Json { .. } => ExitKind::Remote,
+            Self::Unavailable(_) | Self::Expired(_) | Self::JobLevel(_) => ExitKind::Unavailable,
+            Self::Integrity(_) | Self::Malformed(_) => ExitKind::Integrity,
+            Self::Remote(_) | Self::Oversized(_) | Self::Json { .. } => ExitKind::Remote,
             Self::Storage { .. } | Self::Serialization(_) => ExitKind::Storage,
+        }
+    }
+
+    pub const fn diagnostic_kind(&self) -> &'static str {
+        match self {
+            Self::Input(_) => "input",
+            Self::Unavailable(_) => "unavailable",
+            Self::Expired(_) => "expired",
+            Self::Oversized(_) => "oversized",
+            Self::Malformed(_) => "malformed",
+            Self::JobLevel(_) => "job_level",
+            Self::Integrity(_) => "identity_or_integrity",
+            Self::Remote(_) => "remote",
+            Self::Json { .. } => "malformed",
+            Self::Storage { .. } | Self::Serialization(_) => "storage",
         }
     }
 

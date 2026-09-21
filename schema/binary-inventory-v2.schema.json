@@ -1,0 +1,27 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/binary-inventory-v2.schema.json",
+  "title": "CUBRID CI bounded binary inventory v2",
+  "type": "object",
+  "required": ["schema_version", "files"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["shard", "name", "state", "reason", "size_bytes", "sha256"],
+        "properties": {
+          "shard": { "type": "string", "pattern": "^[0-9]+$" },
+          "name": { "type": "string", "minLength": 1 },
+          "state": { "enum": ["downloaded", "excluded"] },
+          "reason": { "type": ["string", "null"] },
+          "size_bytes": { "type": ["integer", "null"], "minimum": 0 },
+          "sha256": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

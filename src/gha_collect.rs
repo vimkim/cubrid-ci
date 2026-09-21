@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
+use std::io::Read;
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{Command, ExitStatus, Stdio};
 
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
@@ -10,7 +11,9 @@ use crate::cli::CollectArgs;
 use crate::config::{ConfigOverride, ResolvedConfig};
 use crate::error::AppError;
 use crate::model::Suite;
-use crate::storage::write_json_atomic;
+use crate::storage::{write_json_atomic, write_json_if_absent};
+
+const MAX_STATUS_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollectResult {
@@ -72,7 +75,14 @@ pub struct ExecutionIdentity {
 pub struct CollectIssue {
     pub suite: String,
     pub kind: String,
+    pub diagnostic: String,
     pub message: String,
+}
+
+struct BinaryOptions<'a> {
+    include: bool,
+    per_file_limit: u64,
+    total_remaining: &'a mut u64,
 }
 
 impl CollectResult {
@@ -165,6 +175,7 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
         .join(&selected_commit);
     let mut suites = BTreeMap::new();
     let mut errors = Vec::new();
+    let mut binary_bytes_remaining = args.max_binary_total_bytes;
     let pinned_executions = requested_suites
         .iter()
         .map(|suite| pin_execution(&snapshot, *suite, &selected_commit))
@@ -175,6 +186,11 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
             suite,
             &selected_commit,
             pinned_execution,
+            BinaryOptions {
+                include: args.include_binaries,
+                per_file_limit: args.max_binary_bytes,
+                total_remaining: &mut binary_bytes_remaining,
+            },
             config.artifact_base.as_ref(),
             &output_dir,
         )
@@ -293,11 +309,12 @@ fn status_snapshot(pr: Option<&str>) -> Result<StatusSnapshot, AppError> {
     if let Some(pr) = pr {
         command.arg(canonical_pr(pr)?);
     }
-    let output = command.stdin(Stdio::null()).output().map_err(|error| {
-        AppError::Input(format!(
-            "failed to execute cubrid-pr-status; install it and ensure it is on PATH: {error}"
-        ))
-    })?;
+    let output = bounded_status_output(&mut command)?;
+    if output.stdout.len() > MAX_STATUS_SNAPSHOT_BYTES {
+        return Err(AppError::Oversized(format!(
+            "cubrid-pr-status JSON exceeds the {MAX_STATUS_SNAPSHOT_BYTES}-byte limit"
+        )));
+    }
     if !output.status.success() {
         return Err(AppError::Remote(format!(
             "cubrid-pr-status exited with {}: {}",
@@ -312,6 +329,59 @@ fn status_snapshot(pr: Option<&str>) -> Result<StatusSnapshot, AppError> {
         })?;
     snapshot.raw_json = output.stdout;
     Ok(snapshot)
+}
+
+struct StatusOutput {
+    status: ExitStatus,
+    stdout: Vec<u8>,
+    stderr: Vec<u8>,
+}
+
+fn bounded_status_output(command: &mut Command) -> Result<StatusOutput, AppError> {
+    let mut child = command
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| {
+            AppError::Input(format!(
+                "failed to execute cubrid-pr-status; install it and ensure it is on PATH: {error}"
+            ))
+        })?;
+    let stdout = child.stdout.take().expect("status stdout is piped");
+    let stderr = child.stderr.take().expect("status stderr is piped");
+    let stdout_reader = std::thread::spawn(move || read_capped(stdout, MAX_STATUS_SNAPSHOT_BYTES));
+    let stderr_reader = std::thread::spawn(move || read_capped(stderr, 1024 * 1024));
+    let status = child
+        .wait()
+        .map_err(|error| AppError::Remote(format!("wait for cubrid-pr-status: {error}")))?;
+    let stdout = stdout_reader
+        .join()
+        .map_err(|_| AppError::Remote("read cubrid-pr-status stdout thread panicked".to_owned()))?
+        .map_err(|error| AppError::Remote(format!("read cubrid-pr-status stdout: {error}")))?;
+    let stderr = stderr_reader
+        .join()
+        .map_err(|_| AppError::Remote("read cubrid-pr-status stderr thread panicked".to_owned()))?
+        .map_err(|error| AppError::Remote(format!("read cubrid-pr-status stderr: {error}")))?;
+    Ok(StatusOutput {
+        status,
+        stdout,
+        stderr,
+    })
+}
+
+fn read_capped(mut reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> {
+    let mut retained = Vec::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = reader.read(&mut buffer)?;
+        if count == 0 {
+            break;
+        }
+        let keep = (limit + 1).saturating_sub(retained.len()).min(count);
+        retained.extend_from_slice(&buffer[..keep]);
+    }
+    Ok(retained)
 }
 
 fn canonical_pr(pr: &str) -> Result<String, AppError> {
@@ -380,6 +450,7 @@ async fn select_suite(
     suite: Suite,
     commit: &str,
     pinned_execution: Option<Result<ExecutionIdentity, AppError>>,
+    binaries: BinaryOptions<'_>,
     artifact_base: Option<&Url>,
     evidence_dir: &std::path::Path,
 ) -> (SuiteResult, Option<CollectIssue>) {
@@ -438,6 +509,9 @@ async fn select_suite(
             artifact_base,
             evidence_dir,
             status_snapshot_json: &snapshot.raw_json,
+            include_binaries: binaries.include,
+            max_binary_bytes: binaries.per_file_limit,
+            binary_bytes_remaining: binaries.total_remaining,
         };
         return match crate::gha_evidence::collect_suite(request).await {
             Ok(_) => (
@@ -464,9 +538,10 @@ async fn select_suite(
                     "schema_version": 2,
                     "trusted": false,
                     "kind": error.kind().as_str(),
+                    "diagnostic": error.diagnostic_kind(),
                     "message": error.to_string(),
                 });
-                if let Err(storage_error) = write_json_atomic(&marker, &diagnostic) {
+                if let Err(storage_error) = write_json_if_absent(&marker, &diagnostic) {
                     return failed_suite_with_identity(
                         suite,
                         status.clone(),
@@ -505,6 +580,7 @@ fn failed_suite(suite: Suite, error: AppError) -> (SuiteResult, Option<CollectIs
         Some(CollectIssue {
             suite: suite.job_name().to_owned(),
             kind: error.kind().as_str().to_owned(),
+            diagnostic: error.diagnostic_kind().to_owned(),
             message: error.to_string(),
         }),
     )
@@ -524,6 +600,7 @@ fn failed_suite_with_identity(
     let issue = CollectIssue {
         suite: suite.job_name().to_owned(),
         kind: error.kind().as_str().to_owned(),
+        diagnostic: error.diagnostic_kind().to_owned(),
         message: error.to_string(),
     };
     (

@@ -109,6 +109,7 @@ fn emit_error(cli: &Cli, error: &cubrid_circleci_analyzer::AppError) {
         let json = serde_json::json!({
             "ok": false,
             "kind": error.kind().as_str(),
+            "diagnostic": error.diagnostic_kind(),
             "error": error.to_string(),
             "exit_code": error.exit_code(),
         });

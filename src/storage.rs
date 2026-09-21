@@ -141,6 +141,90 @@ pub fn write_bytes_atomic(path: &Path, value: &[u8]) -> Result<(), AppError> {
     sync_parent(path)
 }
 
+pub fn write_bytes_immutable(path: &Path, value: &[u8]) -> Result<(), AppError> {
+    match fs::read(path) {
+        Ok(existing) if existing == value => return Ok(()),
+        Ok(_) => {
+            return Err(AppError::Integrity(format!(
+                "immutable evidence already exists with different content: {}",
+                path.display()
+            )));
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
+        Err(error) => return Err(AppError::storage(path, error)),
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Input(format!("output path has no parent: {}", path.display())))?;
+    create_dir_all(parent)?;
+    let mut temporary =
+        NamedTempFile::new_in(parent).map_err(|source| AppError::storage(parent, source))?;
+    temporary
+        .write_all(value)
+        .map_err(|source| AppError::storage(temporary.path(), source))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| AppError::storage(temporary.path(), source))?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => sync_parent(path),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = fs::read(path).map_err(|source| AppError::storage(path, source))?;
+            if existing == value {
+                Ok(())
+            } else {
+                Err(AppError::Integrity(format!(
+                    "immutable evidence already exists with different content: {}",
+                    path.display()
+                )))
+            }
+        }
+        Err(error) => Err(AppError::storage(path, error.error)),
+    }
+}
+
+pub fn write_string_immutable(path: &Path, value: &str) -> Result<(), AppError> {
+    write_bytes_immutable(path, value.as_bytes())
+}
+
+pub fn write_json_immutable(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    write_bytes_immutable(path, &bytes)
+}
+
+pub fn write_string_if_absent(path: &Path, value: &str) -> Result<(), AppError> {
+    write_bytes_if_absent(path, value.as_bytes())
+}
+
+pub fn write_json_if_absent(path: &Path, value: &impl Serialize) -> Result<(), AppError> {
+    let bytes = serde_json::to_vec_pretty(value)?;
+    write_bytes_if_absent(path, &bytes)
+}
+
+fn write_bytes_if_absent(path: &Path, value: &[u8]) -> Result<(), AppError> {
+    if path.exists() {
+        return Ok(());
+    }
+    let parent = path
+        .parent()
+        .ok_or_else(|| AppError::Input(format!("output path has no parent: {}", path.display())))?;
+    create_dir_all(parent)?;
+    let mut temporary =
+        NamedTempFile::new_in(parent).map_err(|source| AppError::storage(parent, source))?;
+    temporary
+        .write_all(value)
+        .map_err(|source| AppError::storage(temporary.path(), source))?;
+    temporary
+        .as_file()
+        .sync_all()
+        .map_err(|source| AppError::storage(temporary.path(), source))?;
+    match temporary.persist_noclobber(path) {
+        Ok(_) => sync_parent(path),
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(error) => Err(AppError::storage(path, error.error)),
+    }
+}
+
 pub fn safe_relative_path(input: &str) -> PathBuf {
     let mut safe = PathBuf::new();
     for component in Path::new(input).components() {
@@ -266,5 +350,16 @@ mod tests {
             fs::read_to_string(storage.suite_dir(Suite::Sql).join("summary.json")).unwrap(),
             "two"
         );
+    }
+
+    #[test]
+    fn immutable_evidence_accepts_identical_replay_but_rejects_rewrite() {
+        let root = tempfile::tempdir().unwrap();
+        let path = root.path().join("run/attempt/raw.json");
+        write_string_immutable(&path, "one").unwrap();
+        write_string_immutable(&path, "one").unwrap();
+        let error = write_string_immutable(&path, "two").unwrap_err();
+        assert!(matches!(error, AppError::Integrity(_)));
+        assert_eq!(fs::read_to_string(path).unwrap(), "one");
     }
 }

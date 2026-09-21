@@ -105,6 +105,18 @@ pub struct CollectArgs {
     /// Delay between status snapshot polls while waiting.
     #[arg(long, default_value = "60s", value_parser = parse_duration)]
     pub poll_interval: Duration,
+
+    /// Download bounded artifacts from abnormal shards.
+    #[arg(long)]
+    pub include_binaries: bool,
+
+    /// Maximum bytes downloaded for one abnormal-shard artifact.
+    #[arg(long, default_value_t = 268_435_456)]
+    pub max_binary_bytes: u64,
+
+    /// Maximum artifact bytes downloaded across the collection.
+    #[arg(long, default_value_t = 536_870_912)]
+    pub max_binary_total_bytes: u64,
 }
 
 #[derive(Debug, Clone, Args)]

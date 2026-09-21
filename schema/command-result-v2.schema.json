@@ -32,10 +32,11 @@
       "type": "array",
       "items": {
         "type": "object",
-        "required": ["suite", "kind", "message"],
+        "required": ["suite", "kind", "diagnostic", "message"],
         "properties": {
           "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
           "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
+          "diagnostic": { "enum": ["input", "unavailable", "expired", "oversized", "malformed", "job_level", "identity_or_integrity", "remote", "storage"] },
           "message": { "type": "string" }
         },
         "additionalProperties": false

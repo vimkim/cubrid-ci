@@ -536,6 +536,266 @@ esac"#,
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn optional_binaries_are_streamed_only_from_abnormal_shards_and_inventoried() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    for (url_path, body) in [
+        (
+            "/runs/123/sql/shard/00/artifacts/",
+            "<a href=\"small.bin\">small.bin</a><a href=\"large.bin\">large.bin</a>",
+        ),
+        ("/runs/123/sql/shard/00/artifacts/small.bin", "abcd"),
+        ("/runs/123/sql/shard/00/artifacts/large.bin", "0123456789"),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(url_path))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+    }
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path())
+        .args([
+            "--include-binaries",
+            "--max-binary-bytes",
+            "4",
+            "--max-binary-total-bytes",
+            "100",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let suite_dir = PathBuf::from(result["output_dir"].as_str().unwrap())
+        .join("providers/github-actions/runs/123/attempts/2/test_sql");
+    assert_eq!(
+        fs::read(suite_dir.join("binaries/00/small.bin")).unwrap(),
+        b"abcd"
+    );
+    assert!(!suite_dir.join("binaries/00/large.bin").exists());
+    let inventory_bytes = fs::read(suite_dir.join("binary-inventory.json")).unwrap();
+    validate_schema(
+        include_str!("../schema/binary-inventory-v2.schema.json"),
+        &inventory_bytes,
+    );
+    let inventory: Value = serde_json::from_slice(&inventory_bytes).unwrap();
+    let files = inventory["files"].as_array().unwrap();
+    assert_eq!(files.len(), 2);
+    assert!(files.iter().any(|file| {
+        file["name"] == "small.bin"
+            && file["state"] == "downloaded"
+            && file["size_bytes"] == 4
+            && file["sha256"].as_str().unwrap().len() == 64
+    }));
+    assert!(files.iter().any(|file| {
+        file["name"] == "large.bin"
+            && file["state"] == "excluded"
+            && file["reason"] == "per_file_limit"
+    }));
+
+    fs::remove_file(suite_dir.join("summary.json")).unwrap();
+    fs::remove_file(suite_dir.join("binary-inventory.json")).unwrap();
+    let replay = command(commands.path(), data.path())
+        .args([
+            "--include-binaries",
+            "--max-binary-bytes",
+            "4",
+            "--max-binary-total-bytes",
+            "100",
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        replay.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&replay.stdout),
+        String::from_utf8_lossy(&replay.stderr)
+    );
+    assert_eq!(
+        fs::read(suite_dir.join("binaries/00/small.bin")).unwrap(),
+        b"abcd"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unsafe_directory_entry_is_a_malformed_diagnostic() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/plan/shards/"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("<a href=\"%2e%2e.list\">bad</a>"))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["diagnostic"], "malformed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn expired_and_oversized_inputs_have_distinct_diagnostics() {
+    for (status, expected_exit, diagnostic) in [(410, 3, "expired"), (200, 5, "oversized")] {
+        let server = MockServer::start().await;
+        mount_evidence(
+            &server,
+            "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+            SHA,
+            1,
+        )
+        .await;
+        let response = if status == 410 {
+            ResponseTemplate::new(410)
+        } else {
+            ResponseTemplate::new(200).set_body_bytes(vec![b'x'; 1024 * 1024 + 1])
+        };
+        Mock::given(method("GET"))
+            .and(path("/runs/123/sql/plan/split.meta"))
+            .respond_with(response)
+            .with_priority(1)
+            .mount(&server)
+            .await;
+        let commands = tempfile::tempdir().unwrap();
+        write_ci_commands(commands.path(), &server);
+        let data = tempfile::tempdir().unwrap();
+
+        let output = command(commands.path(), data.path()).output().unwrap();
+        assert_eq!(output.status.code(), Some(expected_exit));
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["errors"][0]["diagnostic"], diagnostic);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn evidence_redirect_is_not_followed_outside_the_pinned_path() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/plan/split.meta"))
+        .respond_with(
+            ResponseTemplate::new(302)
+                .insert_header("Location", format!("{}/outside", server.uri())),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/outside"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("escaped"))
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        !requests
+            .iter()
+            .any(|request| request.url.path() == "/outside")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn malformed_provenance_has_a_malformed_diagnostic() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/shard/00/build.read"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(format!(
+            "sha={SHA}\nmode=debug\nns=develop\nrun_id=not-a-number\nrun_attempt=2\n"
+        )))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["errors"][0]["diagnostic"], "malformed");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn recollection_reuses_immutable_attempt_evidence_and_only_refreshes_manifest() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let first = command(commands.path(), data.path()).output().unwrap();
+    assert!(first.status.success());
+    let first_result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    let suite_dir = PathBuf::from(first_result["output_dir"].as_str().unwrap())
+        .join("providers/github-actions/runs/123/attempts/2/test_sql");
+    let first_summary = fs::read(suite_dir.join("summary.json")).unwrap();
+    let request_count = server.received_requests().await.unwrap().len();
+
+    let second = command(commands.path(), data.path()).output().unwrap();
+    assert!(second.status.success());
+    let second_result: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(
+        fs::read(suite_dir.join("summary.json")).unwrap(),
+        first_summary
+    );
+    assert_eq!(
+        server.received_requests().await.unwrap().len(),
+        request_count
+    );
+    assert_ne!(first_result["collected_at"], second_result["collected_at"]);
+}
+
 fn write_ci_commands(commands: &Path, server: &MockServer) {
     write_command(
         commands,
