@@ -49,7 +49,7 @@ pub struct Cli {
 impl Cli {
     pub fn suite_and_args(&self) -> Option<(Suite, &FetchArgs)> {
         match &self.command {
-            Commands::Status(_) => None,
+            Commands::Status(_) | Commands::Doctor(_) => None,
             Commands::TestMedium(args) => Some((Suite::Medium, args)),
             Commands::TestSql(args) => Some((Suite::Sql, args)),
             Commands::TestShell(args) => Some((Suite::Shell, args)),
@@ -61,12 +61,25 @@ impl Cli {
 pub enum Commands {
     /// Show a pull-request status snapshot using cubrid-pr-status.
     Status(StatusArgs),
+    /// Check dependencies and local collection configuration.
+    Doctor(DoctorArgs),
     /// Fetch the test_medium result.
     TestMedium(FetchArgs),
     /// Fetch the test_sql result.
     TestSql(FetchArgs),
     /// Fetch the test_shell result.
     TestShell(FetchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct DoctorArgs {
+    /// Root directory for durable evidence.
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+
+    /// Internal CI evidence-server base URL.
+    #[arg(long)]
+    pub artifact_base: Option<String>,
 }
 
 #[derive(Debug, Clone, Args)]

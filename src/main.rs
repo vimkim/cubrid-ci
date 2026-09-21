@@ -2,6 +2,8 @@ use std::process::ExitCode;
 
 use clap::Parser;
 use cubrid_circleci_analyzer::cli::Commands;
+use cubrid_circleci_analyzer::config::{ConfigOverride, ResolvedConfig};
+use cubrid_circleci_analyzer::doctor::DoctorResult;
 use cubrid_circleci_analyzer::{Cli, Collector, CollectorConfig};
 use tracing_subscriber::EnvFilter;
 
@@ -14,6 +16,33 @@ async fn main() -> ExitCode {
         let error = cubrid_circleci_analyzer::status::execute(args, cli.json);
         emit_error(&cli, &error);
         return ExitCode::from(error.exit_code());
+    }
+
+    if let Commands::Doctor(args) = &cli.command {
+        let config = match ResolvedConfig::load(ConfigOverride {
+            data_dir: args.data_dir.clone(),
+            artifact_base: args.artifact_base.clone(),
+        }) {
+            Ok(config) => config,
+            Err(error) => {
+                emit_error(&cli, &error);
+                return ExitCode::from(error.exit_code());
+            }
+        };
+        let result = DoctorResult::run(config).await;
+        if cli.json {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&result).unwrap_or_else(|_| "{}".to_owned())
+            );
+        } else {
+            println!("{}", result.human_summary());
+        }
+        return if result.ok {
+            ExitCode::SUCCESS
+        } else {
+            ExitCode::from(2)
+        };
     }
 
     let config = match CollectorConfig::from_cli(&cli) {
