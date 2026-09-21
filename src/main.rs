@@ -1,6 +1,7 @@
 use std::process::ExitCode;
 
 use clap::Parser;
+use cubrid_circleci_analyzer::cli::Commands;
 use cubrid_circleci_analyzer::{Cli, Collector, CollectorConfig};
 use tracing_subscriber::EnvFilter;
 
@@ -8,6 +9,12 @@ use tracing_subscriber::EnvFilter;
 async fn main() -> ExitCode {
     let cli = Cli::parse();
     init_tracing(cli.verbose);
+
+    if let Commands::Status(args) = &cli.command {
+        let error = cubrid_circleci_analyzer::status::execute(args, cli.json);
+        emit_error(&cli, &error);
+        return ExitCode::from(error.exit_code());
+    }
 
     let config = match CollectorConfig::from_cli(&cli) {
         Ok(config) => config,

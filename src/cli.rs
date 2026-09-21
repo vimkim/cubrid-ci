@@ -47,23 +47,52 @@ pub struct Cli {
 }
 
 impl Cli {
-    pub fn suite_and_args(&self) -> (Suite, &FetchArgs) {
+    pub fn suite_and_args(&self) -> Option<(Suite, &FetchArgs)> {
         match &self.command {
-            Commands::TestMedium(args) => (Suite::Medium, args),
-            Commands::TestSql(args) => (Suite::Sql, args),
-            Commands::TestShell(args) => (Suite::Shell, args),
+            Commands::Status(_) => None,
+            Commands::TestMedium(args) => Some((Suite::Medium, args)),
+            Commands::TestSql(args) => Some((Suite::Sql, args)),
+            Commands::TestShell(args) => Some((Suite::Shell, args)),
         }
     }
 }
 
 #[derive(Debug, Subcommand)]
 pub enum Commands {
+    /// Show a pull-request status snapshot using cubrid-pr-status.
+    Status(StatusArgs),
     /// Fetch the test_medium result.
     TestMedium(FetchArgs),
     /// Fetch the test_sql result.
     TestSql(FetchArgs),
     /// Fetch the test_shell result.
     TestShell(FetchArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct StatusArgs {
+    /// CUBRID pull-request number or URL; otherwise detect from the current directory.
+    pub pr: Option<String>,
+
+    /// Number of previous PR commits to search.
+    #[arg(long)]
+    pub history: Option<u16>,
+
+    /// Expected-check configuration passed to cubrid-pr-status.
+    #[arg(long)]
+    pub config: Option<PathBuf>,
+
+    /// Refresh until interrupted.
+    #[arg(long)]
+    pub watch: bool,
+
+    /// Seconds between watch refreshes.
+    #[arg(long)]
+    pub interval: Option<u64>,
+
+    /// Force human-readable output.
+    #[arg(long, conflicts_with = "json")]
+    pub human: bool,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -149,8 +178,11 @@ mod tests {
                 "manifest",
             ])
             .unwrap();
-            assert_eq!(cli.suite_and_args().0, suite);
-            assert_eq!(cli.suite_and_args().1.commit.as_deref(), Some("c2cbeaf"));
+            assert_eq!(cli.suite_and_args().unwrap().0, suite);
+            assert_eq!(
+                cli.suite_and_args().unwrap().1.commit.as_deref(),
+                Some("c2cbeaf")
+            );
         }
     }
 
@@ -163,7 +195,10 @@ mod tests {
         ])
         .unwrap();
 
-        assert_eq!(cli.suite_and_args().1.artifact_mode, ArtifactMode::Manifest);
+        assert_eq!(
+            cli.suite_and_args().unwrap().1.artifact_mode,
+            ArtifactMode::Manifest
+        );
     }
 
     #[test]
@@ -178,7 +213,7 @@ mod tests {
             ])
             .unwrap();
 
-            assert_eq!(cli.suite_and_args().1.artifact_mode, expected);
+            assert_eq!(cli.suite_and_args().unwrap().1.artifact_mode, expected);
         }
     }
 }

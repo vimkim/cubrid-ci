@@ -9,6 +9,7 @@ pub mod github;
 pub mod http;
 pub mod model;
 pub mod stats;
+pub mod status;
 pub mod storage;
 
 pub use cli::Cli;

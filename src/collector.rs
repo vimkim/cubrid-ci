@@ -41,7 +41,9 @@ pub struct CollectorConfig {
 
 impl CollectorConfig {
     pub fn from_cli(cli: &Cli) -> Result<Self, AppError> {
-        let (suite, args) = cli.suite_and_args();
+        let (suite, args) = cli.suite_and_args().ok_or_else(|| {
+            AppError::Input("the selected command does not collect suite evidence".to_owned())
+        })?;
         if args.timeout.is_zero() {
             return Err(AppError::Input(
                 "--timeout must be greater than zero".to_owned(),
