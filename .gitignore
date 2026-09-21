@@ -1,6 +1,6 @@
 /target/
 /data/
+/.scratch/
 /.idea/
 /.vscode/
 *.tmp
-
