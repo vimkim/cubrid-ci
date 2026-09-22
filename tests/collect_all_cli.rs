@@ -19,7 +19,10 @@ async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
     write_commands(commands.path(), &server);
     let data = tempfile::tempdir().unwrap();
 
-    let output = command(commands.path(), data.path()).output().unwrap();
+    let output = command(commands.path(), data.path())
+        .arg("--json")
+        .output()
+        .unwrap();
 
     assert_eq!(output.status.code(), Some(3));
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
@@ -67,12 +70,60 @@ async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
         ))
         .unwrap(),
         concat!(
+            "#\n",
+            "#Tue Sep 22 06:03:57 KST 2026\n",
             "total_executed_case_count=1\n",
             "total_success_case_count=0\n",
             "total_fail_case_count=1\n",
             "total_skip_case_count=0\n"
         )
     );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn human_output_reports_ci_outcomes_and_test_counts() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    mount_shell(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        stdout.contains("test_medium: SUCCESS (0 failed / 1 executed)"),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("test_shell: FAILURE (1 failed / 1 executed)"),
+        "{stdout}"
+    );
+    assert!(stdout.contains("test_sql: PENDING (running)"), "{stdout}");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn shell_collection_accepts_junit_larger_than_generic_text_evidence() {
+    let server = MockServer::start().await;
+    mount_large_shell(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path())
+        .args(["--suite", "test_shell", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_shell"]["state"], "completed");
 }
 
 fn command(commands: &Path, data: &Path) -> Command {
@@ -83,8 +134,7 @@ fn command(commands: &Path, data: &Path) -> Command {
         .env_remove("CUBRID_CI_DATA_DIR")
         .env_remove("CUBRID_CI_ARTIFACT_BASE")
         .args(["collect", "7990", "--commit", SHA, "--data-dir"])
-        .arg(data)
-        .arg("--json");
+        .arg(data);
     command
 }
 
@@ -178,6 +228,8 @@ async fn mount_shell(server: &MockServer) {
         server,
         "/runs/300/shell/shard/00/test_status.data",
         concat!(
+            "#\n",
+            "#Tue Sep 22 06:03:57 KST 2026\n",
             "total_executed_case_count=1\n",
             "total_success_case_count=0\n",
             "total_fail_case_count=1\n",
@@ -193,6 +245,33 @@ async fn mount_shell(server: &MockServer) {
             "<testcase name=\"shell/foo/cases/foo.sh\"><failure><![CDATA[assert failed]]></failure></testcase>",
             "</testsuite>"
         ),
+    )
+    .await;
+}
+
+async fn mount_large_shell(server: &MockServer) {
+    mount_common(server, 300, "shell", "00\tshell/foo/cases/foo.sh\n", 250).await;
+    mount(
+        server,
+        "/runs/300/shell/shard/00/test_status.data",
+        concat!(
+            "#\n",
+            "#Tue Sep 22 06:03:57 KST 2026\n",
+            "total_executed_case_count=1\n",
+            "total_success_case_count=0\n",
+            "total_fail_case_count=1\n",
+            "total_skip_case_count=0\n"
+        ),
+    )
+    .await;
+    let xml = format!(
+        "<testsuite tests=\"1\" failures=\"1\"><testcase name=\"shell/foo/cases/foo.sh\"><failure>{}</failure></testcase></testsuite>",
+        "x".repeat(16 * 1024 * 1024)
+    );
+    mount(
+        server,
+        "/runs/300/shell/shard/00/test-results/test-shell.xml",
+        &xml,
     )
     .await;
 }

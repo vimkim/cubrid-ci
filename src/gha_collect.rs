@@ -106,22 +106,46 @@ impl CollectResult {
         let suites = self
             .suites
             .iter()
-            .map(|(name, result)| format!("{name}={}", result.state.as_str()))
+            .map(|(name, result)| self.human_suite_summary(name, result))
             .collect::<Vec<_>>()
-            .join(", ");
+            .join("\n");
         let completeness = if self.ok {
             "evidence"
         } else {
             "incomplete evidence"
         };
         format!(
-            "collected {completeness} snapshot for {}#{} at {}: {} -> {}",
+            "collected {completeness} snapshot for {}#{} at {} -> {}\n{}",
             self.repository,
             self.pr.number,
             &self.commit[..7],
-            suites,
-            self.output_dir.display()
+            self.output_dir.display(),
+            suites
         )
+    }
+
+    fn human_suite_summary(&self, name: &str, result: &SuiteResult) -> String {
+        let state = result.state.as_str();
+        let ci_state = result.status.as_ref().map(|status| status.state.as_str());
+        if result.state == SuiteState::Completed
+            && let Some(path) = &result.summary
+            && let Ok(bytes) = std::fs::read(self.output_dir.join(path))
+            && let Ok(summary) = serde_json::from_slice::<crate::gha_evidence::SuiteSummary>(&bytes)
+        {
+            return format!(
+                "{name}: {} ({} failed / {} executed)",
+                ci_state.unwrap_or(&summary.ci_state),
+                summary.counts.failures + summary.counts.errors,
+                summary.counts.run
+            );
+        }
+        match ci_state {
+            Some(ci_state) if result.state == SuiteState::Completed => {
+                format!("{name}: {ci_state}")
+            }
+            Some(ci_state) => format!("{name}: {ci_state} ({state})"),
+            None => format!("{name}: {state}"),
+        }
     }
 }
 

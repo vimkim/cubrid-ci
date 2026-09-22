@@ -19,6 +19,7 @@ use crate::storage::{write_json_immutable, write_string_if_absent, write_string_
 
 const MAX_INDEX_BYTES: usize = 1024 * 1024;
 const MAX_TEXT_BYTES: usize = 16 * 1024 * 1024;
+const MAX_JUNIT_BYTES: usize = 32 * 1024 * 1024;
 const MAX_GITHUB_JSON_BYTES: usize = 8 * 1024 * 1024;
 const MAX_GITHUB_LOG_BYTES: usize = 32 * 1024 * 1024;
 
@@ -568,7 +569,7 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             let xml = fetch_text(
                 &client,
                 shard_root.join(&format!("test-results/{file}")).unwrap(),
-                MAX_TEXT_BYTES,
+                MAX_JUNIT_BYTES,
             )
             .await?;
             write_string_immutable(&provider_raw.join(format!("shards/{shard}/{file}")), &xml)?;
@@ -1509,7 +1510,15 @@ fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
 }
 
 fn parse_test_status(value: &str) -> Result<WorkflowCounts, AppError> {
-    let fields = parse_key_values(value)?;
+    let properties = value
+        .lines()
+        .filter(|line| {
+            let line = line.trim_start();
+            !line.starts_with('#') && !line.starts_with('!')
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let fields = parse_key_values(&properties)?;
     let count = |name| {
         fields
             .get(name)

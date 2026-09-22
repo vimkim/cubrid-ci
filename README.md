@@ -41,6 +41,12 @@ All commands accept `--json`. A fully collected red suite exits successfully:
 CI outcome is data, while the process exit reports collection completeness and
 trustworthiness.
 
+Human-readable collection output reports each suite's CI outcome and trusted
+test counts. For example, a red suite may appear as
+`test_shell: FAILURE (3 failed / 3256 executed)` while the collection command
+still exits successfully. Use `--json` when a stable machine-readable result is
+required.
+
 | Exit | Meaning |
 |---:|---|
 | 0 | Requested terminal evidence was validated and collected |
