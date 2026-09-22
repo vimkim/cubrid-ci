@@ -2,8 +2,10 @@ use std::collections::BTreeMap;
 use std::io::Read;
 use std::path::PathBuf;
 use std::process::{Command, ExitStatus, Stdio};
+use std::sync::{Arc, Mutex};
 
 use chrono::{DateTime, Utc};
+use futures_util::stream::{FuturesUnordered, StreamExt};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -14,6 +16,38 @@ use crate::model::Suite;
 use crate::storage::{write_json_atomic, write_json_if_absent};
 
 const MAX_STATUS_SNAPSHOT_BYTES: usize = 8 * 1024 * 1024;
+
+#[derive(Debug, Clone, Copy)]
+pub enum ProgressEvent {
+    Starting {
+        total: usize,
+    },
+    StatusReady {
+        total: usize,
+    },
+    Collecting {
+        total: usize,
+    },
+    SuiteFinished {
+        suite: Suite,
+        completed: usize,
+        total: usize,
+    },
+    Verifying {
+        total: usize,
+    },
+    Finished,
+}
+
+pub trait CollectProgress: Send + Sync {
+    fn report(&self, event: ProgressEvent);
+}
+
+struct NoProgress;
+
+impl CollectProgress for NoProgress {
+    fn report(&self, _event: ProgressEvent) {}
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct CollectResult {
@@ -83,6 +117,19 @@ struct BinaryOptions<'a> {
     include: bool,
     per_file_limit: u64,
     total_remaining: &'a mut u64,
+}
+
+#[derive(Clone)]
+struct PinnedRun {
+    attempt: u64,
+    json: Arc<Vec<u8>>,
+    context: Arc<Mutex<Option<Arc<crate::gha_evidence::RunContext>>>>,
+}
+
+struct PinnedExecution {
+    identity: ExecutionIdentity,
+    run_json: Arc<Vec<u8>>,
+    run_context: Arc<Mutex<Option<Arc<crate::gha_evidence::RunContext>>>>,
 }
 
 impl CollectResult {
@@ -162,6 +209,21 @@ impl SuiteState {
 }
 
 pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
+    run_with_progress(args, &NoProgress).await
+}
+
+pub async fn run_with_progress(
+    args: &CollectArgs,
+    progress: &dyn CollectProgress,
+) -> Result<CollectResult, AppError> {
+    let total_suites = if args.suite.is_empty() {
+        Suite::ALL.len()
+    } else {
+        args.suite.len()
+    };
+    progress.report(ProgressEvent::Starting {
+        total: total_suites,
+    });
     let explicit = args.pr.is_some();
     let selected_commit = select_commit(args)?;
     let mut snapshot = status_snapshot(args.pr.as_deref())?;
@@ -187,6 +249,9 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
             validate_snapshot(&snapshot, args.pr.as_deref(), &selected_commit, explicit)?;
         }
     }
+    progress.report(ProgressEvent::StatusReady {
+        total: total_suites,
+    });
 
     let config = ResolvedConfig::load(ConfigOverride {
         data_dir: args.data_dir.clone(),
@@ -200,28 +265,90 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
     let mut suites = BTreeMap::new();
     let mut errors = Vec::new();
     let mut binary_bytes_remaining = args.max_binary_total_bytes;
+    let mut pinned_runs = BTreeMap::new();
     let pinned_executions = requested_suites
         .iter()
-        .map(|suite| pin_execution(&snapshot, *suite, &selected_commit))
+        .map(|suite| pin_execution(&snapshot, *suite, &selected_commit, &mut pinned_runs))
         .collect::<Vec<_>>();
-    for (suite, pinned_execution) in requested_suites.into_iter().zip(pinned_executions) {
-        let (suite_result, issue) = select_suite(
-            &snapshot,
-            suite,
-            &selected_commit,
-            pinned_execution,
-            BinaryOptions {
-                include: args.include_binaries,
-                per_file_limit: args.max_binary_bytes,
-                total_remaining: &mut binary_bytes_remaining,
-            },
-            config.artifact_base.as_ref(),
-            &output_dir,
-        )
-        .await;
-        suites.insert(suite.job_name().to_owned(), suite_result);
-        if let Some(issue) = issue {
-            errors.push(issue);
+    progress.report(ProgressEvent::Collecting {
+        total: total_suites,
+    });
+    if args.include_binaries {
+        for (completed, (suite, pinned_execution)) in requested_suites
+            .into_iter()
+            .zip(pinned_executions)
+            .enumerate()
+        {
+            let (suite_result, issue) = select_suite(
+                &snapshot,
+                suite,
+                &selected_commit,
+                pinned_execution,
+                BinaryOptions {
+                    include: true,
+                    per_file_limit: args.max_binary_bytes,
+                    total_remaining: &mut binary_bytes_remaining,
+                },
+                config.artifact_base.as_ref(),
+                &output_dir,
+            )
+            .await;
+            suites.insert(suite.job_name().to_owned(), suite_result);
+            if let Some(issue) = issue {
+                errors.push(issue);
+            }
+            progress.report(ProgressEvent::SuiteFinished {
+                suite,
+                completed: completed + 1,
+                total: total_suites,
+            });
+        }
+    } else {
+        let snapshot_ref = &snapshot;
+        let selected_commit_ref = selected_commit.as_str();
+        let artifact_base = config.artifact_base.as_ref();
+        let output_dir_ref = &output_dir;
+        let max_binary_bytes = args.max_binary_bytes;
+        let collections = requested_suites
+            .into_iter()
+            .zip(pinned_executions)
+            .enumerate()
+            .map(move |(position, (suite, pinned_execution))| async move {
+                let mut unused_binary_budget = 0;
+                let result = select_suite(
+                    snapshot_ref,
+                    suite,
+                    selected_commit_ref,
+                    pinned_execution,
+                    BinaryOptions {
+                        include: false,
+                        per_file_limit: max_binary_bytes,
+                        total_remaining: &mut unused_binary_budget,
+                    },
+                    artifact_base,
+                    output_dir_ref,
+                )
+                .await;
+                (position, suite, result)
+            });
+        let mut collections = collections.collect::<FuturesUnordered<_>>();
+        let mut completed = 0;
+        let mut collected = Vec::with_capacity(total_suites);
+        while let Some((position, suite, result)) = collections.next().await {
+            completed += 1;
+            progress.report(ProgressEvent::SuiteFinished {
+                suite,
+                completed,
+                total: total_suites,
+            });
+            collected.push((position, suite, result));
+        }
+        collected.sort_by_key(|(position, _, _)| *position);
+        for (_, suite, (suite_result, issue)) in collected {
+            suites.insert(suite.job_name().to_owned(), suite_result);
+            if let Some(issue) = issue {
+                errors.push(issue);
+            }
         }
     }
     let ok = suites
@@ -243,14 +370,12 @@ pub async fn run(args: &CollectArgs) -> Result<CollectResult, AppError> {
         suites,
         errors,
     };
-    let final_snapshot = status_snapshot(args.pr.as_deref())?;
-    validate_snapshot(
-        &final_snapshot,
-        args.pr.as_deref(),
-        &selected_commit,
-        explicit,
-    )?;
+    progress.report(ProgressEvent::Verifying {
+        total: total_suites,
+    });
+    verify_pr_head(snapshot.pr.number, &selected_commit)?;
     write_json_atomic(&output_dir.join("manifest.json"), &result)?;
+    progress.report(ProgressEvent::Finished);
     Ok(result)
 }
 
@@ -258,7 +383,8 @@ fn pin_execution(
     snapshot: &StatusSnapshot,
     suite: Suite,
     commit: &str,
-) -> Option<Result<ExecutionIdentity, AppError>> {
+    pinned_runs: &mut BTreeMap<u64, PinnedRun>,
+) -> Option<Result<PinnedExecution, AppError>> {
     let name = format!("gha-ci: {}", suite.job_name());
     let check = snapshot
         .checks
@@ -271,7 +397,22 @@ fn pin_execution(
         )));
     }
     Some(actions_run_id(&status.detail_url).and_then(|run_id| {
-        current_attempt(run_id).map(|attempt| ExecutionIdentity { run_id, attempt })
+        let run = match pinned_runs.get(&run_id) {
+            Some(run) => run.clone(),
+            None => {
+                let run = load_actions_run(run_id)?;
+                pinned_runs.insert(run_id, run.clone());
+                run
+            }
+        };
+        Ok(PinnedExecution {
+            identity: ExecutionIdentity {
+                run_id,
+                attempt: run.attempt,
+            },
+            run_json: run.json,
+            run_context: run.context,
+        })
     }))
 }
 
@@ -473,7 +614,7 @@ async fn select_suite(
     snapshot: &StatusSnapshot,
     suite: Suite,
     commit: &str,
-    pinned_execution: Option<Result<ExecutionIdentity, AppError>>,
+    pinned_execution: Option<Result<PinnedExecution, AppError>>,
     binaries: BinaryOptions<'_>,
     artifact_base: Option<&Url>,
     evidence_dir: &std::path::Path,
@@ -511,7 +652,7 @@ async fn select_suite(
             AppError::Integrity("suite status does not identify the selected commit".to_owned()),
         );
     }
-    let execution = match pinned_execution {
+    let pinned_execution = match pinned_execution {
         Some(Ok(execution)) => execution,
         Some(Err(error)) => return failed_suite(suite, error),
         None => {
@@ -521,6 +662,7 @@ async fn select_suite(
             );
         }
     };
+    let execution = pinned_execution.identity;
     let run_id = execution.run_id;
     let attempt = execution.attempt;
     if !status.state.eq_ignore_ascii_case("pending") {
@@ -533,6 +675,8 @@ async fn select_suite(
             artifact_base,
             evidence_dir,
             status_snapshot_json: &snapshot.raw_json,
+            run_json: &pinned_execution.run_json,
+            run_context: &pinned_execution.run_context,
             include_binaries: binaries.include,
             max_binary_bytes: binaries.per_file_limit,
             binary_bytes_remaining: binaries.total_remaining,
@@ -660,27 +804,50 @@ fn actions_run_id(value: &str) -> Result<u64, AppError> {
         .ok_or_else(|| AppError::Integrity("suite status URL has an invalid run ID".to_owned()))
 }
 
-fn current_attempt(run_id: u64) -> Result<u64, AppError> {
+fn load_actions_run(run_id: u64) -> Result<PinnedRun, AppError> {
     let endpoint = format!("repos/CUBRID/cubrid/actions/runs/{run_id}");
-    let output = Command::new("gh")
-        .args(["api", &endpoint])
-        .stdin(Stdio::null())
-        .output()
-        .map_err(|error| AppError::Remote(format!("failed to execute gh: {error}")))?;
-    if !output.status.success() {
-        return Err(AppError::Remote(format!(
-            "gh api failed for Actions run {run_id} with {}",
-            output.status
-        )));
-    }
-    let run: ActionsRun = serde_json::from_slice(&output.stdout)
-        .map_err(|source| AppError::Json { endpoint, source })?;
+    let output = gh_api_output(&endpoint)?;
+    let run: ActionsRun =
+        serde_json::from_slice(&output).map_err(|source| AppError::Json { endpoint, source })?;
     if run.id != run_id || run.run_attempt == 0 {
         return Err(AppError::Integrity(format!(
             "Actions metadata does not match run {run_id}"
         )));
     }
-    Ok(run.run_attempt)
+    Ok(PinnedRun {
+        attempt: run.run_attempt,
+        json: Arc::new(output),
+        context: Arc::new(Mutex::new(None)),
+    })
+}
+
+fn verify_pr_head(pr_number: u64, selected_commit: &str) -> Result<(), AppError> {
+    let endpoint = format!("repos/CUBRID/cubrid/pulls/{pr_number}");
+    let output = gh_api_output(&endpoint)?;
+    let pull: GithubPull =
+        serde_json::from_slice(&output).map_err(|source| AppError::Json { endpoint, source })?;
+    if pull.number != pr_number || !pull.head.sha.eq_ignore_ascii_case(selected_commit) {
+        return Err(AppError::Integrity(format!(
+            "selected commit {selected_commit} is no longer pull request #{pr_number} head {}",
+            pull.head.sha
+        )));
+    }
+    Ok(())
+}
+
+fn gh_api_output(endpoint: &str) -> Result<Vec<u8>, AppError> {
+    let output = Command::new("gh")
+        .args(["api", endpoint])
+        .stdin(Stdio::null())
+        .output()
+        .map_err(|error| AppError::Remote(format!("failed to execute gh: {error}")))?;
+    if !output.status.success() {
+        return Err(AppError::Remote(format!(
+            "gh api failed for {endpoint} with {}",
+            output.status
+        )));
+    }
+    Ok(output.stdout)
 }
 
 #[derive(Debug, Deserialize)]
@@ -713,6 +880,17 @@ struct StatusCheck {
 struct ActionsRun {
     id: u64,
     run_attempt: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPull {
+    number: u64,
+    head: GithubPullHead,
+}
+
+#[derive(Debug, Deserialize)]
+struct GithubPullHead {
+    sha: String,
 }
 
 #[cfg(test)]

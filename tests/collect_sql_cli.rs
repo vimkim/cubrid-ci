@@ -275,7 +275,7 @@ async fn wait_refreshes_status_then_pins_the_terminal_execution() {
             .trim()
             .parse::<u64>()
             .unwrap()
-            >= 3
+            >= 2
     );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(result["suites"]["test_sql"]["execution"]["run_id"], 123);
@@ -329,9 +329,22 @@ async fn moved_pr_head_rejects_publication_but_keeps_downloaded_evidence() {
         commands.path(),
         &counter,
         &status_snapshot_with("FAILURE", SHA, 123),
-        &status_snapshot_with("FAILURE", "2222222222222222222222222222222222222222", 999),
+        &status_snapshot_with("FAILURE", SHA, 123),
     );
-    write_gh_command(commands.path(), &server);
+    write_command(
+        commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"2222222222222222222222222222222222222222"}}}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":900,"name":"collect","run_attempt":2}}]}}' ;;
+  *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            server.uri()
+        ),
+    );
     let data = tempfile::tempdir().unwrap();
 
     let output = command(commands.path(), data.path()).output().unwrap();
@@ -347,6 +360,7 @@ async fn moved_pr_head_rejects_publication_but_keeps_downloaded_evidence() {
         root.join("providers/github-actions/runs/123/attempts/2/test_sql/summary.json")
             .exists()
     );
+    assert_eq!(fs::read_to_string(counter).unwrap().trim(), "1");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -364,6 +378,7 @@ async fn failed_plan_job_is_retained_as_job_level_failure() {
         commands.path(),
         "gh",
         r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{"number":7990,"head":{"sha":"1111111111111111111111111111111111111111"}}' ;;
   *actions/runs/123/jobs*) printf '%s\n' '{"jobs":[{"id":901,"name":"plan / test_sql","run_attempt":2,"conclusion":"failure"}]}' ;;
   *actions/jobs/901/logs*) printf '%s\n' 'planner failed before publishing evidence' ;;
   *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
@@ -416,6 +431,7 @@ async fn unrelated_attempt_and_suite_failures_do_not_reclassify_a_transport_erro
         "gh",
         &format!(
             r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
   *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":901,"name":"plan / test_sql","run_attempt":1,"conclusion":"failure"}},{{"id":902,"name":"shard shell 09","run_attempt":2,"conclusion":"failure"}},{{"id":900,"name":"collect","run_attempt":2,"conclusion":"failure"}}]}}' ;;
   *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
   *actions/jobs/901/logs*|*actions/jobs/902/logs*) exit 73 ;;
@@ -470,6 +486,7 @@ async fn collect_job_can_be_discovered_on_a_later_jobs_page() {
         "gh",
         &format!(
             r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
   *actions/runs/123/jobs*page=2*) printf '%s\n' '{{"total_count":2,"jobs":[{{"id":900,"name":"collect","run_attempt":2,"conclusion":"success"}}]}}' ;;
   *actions/runs/123/jobs*page=1*) printf '%s\n' '{{"total_count":2,"jobs":[{{"id":899,"name":"plan / test_sql","run_attempt":2,"conclusion":"success"}}]}}' ;;
   *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
@@ -515,6 +532,7 @@ async fn failed_collect_job_with_unavailable_log_is_job_level_failure() {
         commands.path(),
         "gh",
         r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{"number":7990,"head":{"sha":"1111111111111111111111111111111111111111"}}' ;;
   *actions/runs/123/jobs*) printf '%s\n' '{"jobs":[{"id":900,"name":"collect","run_attempt":2,"conclusion":"cancelled"}]}' ;;
   *actions/jobs/900/logs*) exit 73 ;;
   *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
@@ -796,6 +814,55 @@ async fn recollection_reuses_immutable_attempt_evidence_and_only_refreshes_manif
     assert_ne!(first_result["collected_at"], second_result["collected_at"]);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn fresh_collection_reuses_the_pinned_actions_run_metadata() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    let calls = commands.path().join("gh-calls");
+    write_command(
+        commands.path(),
+        "gh",
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":900,"name":"collect","run_attempt":2}}]}}' ;;
+  *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            calls.display(),
+            server.uri()
+        ),
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert!(output.status.success());
+    let run_metadata_calls = fs::read_to_string(calls)
+        .unwrap()
+        .lines()
+        .filter(|call| *call == "api repos/CUBRID/cubrid/actions/runs/123")
+        .count();
+    assert_eq!(run_metadata_calls, 1);
+}
+
 fn write_ci_commands(commands: &Path, server: &MockServer) {
     write_command(
         commands,
@@ -814,6 +881,7 @@ fn write_gh_command(commands: &Path, server: &MockServer) {
         "gh",
         &format!(
             r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
   *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":900,"name":"collect","run_attempt":2}}]}}' ;;
   *actions/jobs/900/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
   *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;

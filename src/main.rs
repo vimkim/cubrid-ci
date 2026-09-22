@@ -5,6 +5,7 @@ use cubrid_ci::Cli;
 use cubrid_ci::cli::Commands;
 use cubrid_ci::config::{ConfigOverride, ResolvedConfig};
 use cubrid_ci::doctor::DoctorResult;
+use cubrid_ci::progress::TerminalProgress;
 use tracing_subscriber::EnvFilter;
 
 #[tokio::main]
@@ -46,7 +47,8 @@ async fn main() -> ExitCode {
     }
 
     if let Commands::Collect(args) = &cli.command {
-        return match cubrid_ci::gha_collect::run(args).await {
+        let progress = TerminalProgress::new(cli.verbose == 0);
+        return match cubrid_ci::gha_collect::run_with_progress(args, &progress).await {
             Ok(result) => {
                 if cli.json {
                     match serde_json::to_string_pretty(&result) {

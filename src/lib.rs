@@ -7,6 +7,7 @@ pub mod error;
 pub mod gha_collect;
 pub mod gha_evidence;
 pub mod model;
+pub mod progress;
 pub mod status;
 pub mod storage;
 

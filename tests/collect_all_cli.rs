@@ -2,6 +2,8 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::Mutex;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
@@ -9,6 +11,7 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SHA: &str = "1111111111111111111111111111111111111111";
 const TC_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+static TIMING_TEST: Mutex<()> = Mutex::new(());
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
@@ -105,6 +108,90 @@ async fn human_output_reports_ci_outcomes_and_test_counts() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn independent_terminal_suites_are_collected_concurrently() {
+    let server = MockServer::start().await;
+    let delay = Duration::from_millis(150);
+    mount_medium_with_delay(&server, delay).await;
+    mount_shell_with_delay(&server, delay).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let _timing_guard = TIMING_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let started = Instant::now();
+    let output = command(commands.path(), data.path())
+        .arg("--json")
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert_eq!(output.status.code(), Some(3));
+    assert!(
+        elapsed < Duration::from_millis(3000),
+        "independent suites took {elapsed:?}; expected their provider waits to overlap"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn independent_shards_are_fetched_concurrently() {
+    let server = MockServer::start().await;
+    let delay = Duration::from_millis(150);
+    mount_medium_shards_with_delay(&server, 4, delay).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let _timing_guard = TIMING_TEST
+        .lock()
+        .unwrap_or_else(|error| error.into_inner());
+    let started = Instant::now();
+    let output = command(commands.path(), data.path())
+        .args(["--suite", "test_medium", "--json"])
+        .output()
+        .unwrap();
+    let elapsed = started.elapsed();
+
+    assert!(output.status.success());
+    assert!(
+        elapsed < Duration::from_millis(3000),
+        "independent shards took {elapsed:?}; expected their provider waits to overlap"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn suites_from_one_run_share_actions_discovery() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path())
+        .args(["--suite", "test_medium", "--suite", "test_medium", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let calls = fs::read_to_string(commands.path().join("gh-calls")).unwrap();
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| call.contains("actions/runs/200/jobs"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| call.contains("actions/jobs/920/logs"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn shell_collection_accepts_junit_larger_than_generic_text_evidence() {
     let server = MockServer::start().await;
     mount_large_shell(&server).await;
@@ -153,6 +240,7 @@ fn write_commands(commands: &Path, server: &MockServer) {
         &format!(
             r#"printf '%s\n' "$*" >> '{}'
 case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
   *actions/runs/200/jobs*) printf '%s\n' '{{"jobs":[{{"id":920,"name":"collect","run_attempt":1}}]}}' ;;
   *actions/runs/300/jobs*) printf '%s\n' '{{"jobs":[{{"id":930,"name":"collect","run_attempt":3}}]}}' ;;
   *actions/jobs/920/logs*|*actions/jobs/930/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
@@ -207,23 +295,152 @@ fn status(suite: &str, state: &str, run_id: u64) -> Value {
 }
 
 async fn mount_medium(server: &MockServer) {
-    mount_common(server, 200, "medium", "", 200).await;
+    mount_medium_with_optional_delay(server, None).await;
+}
+
+async fn mount_medium_with_delay(server: &MockServer, delay: Duration) {
+    mount_medium_with_optional_delay(server, Some(delay)).await;
+}
+
+async fn mount_medium_with_optional_delay(server: &MockServer, delay: Option<Duration>) {
+    mount_common(server, 200, "medium", "", 200, delay).await;
     mount(
         server,
         "/runs/200/medium/shard/00/summary_info",
         "case.sql:ok 10ms\n",
+        delay,
     )
     .await;
     mount(
         server,
         "/runs/200/medium/shard/00/test-results/results.xml",
         "<testsuite tests=\"1\"><testcase name=\"case.sql\" time=\"0.01\"/></testsuite>",
+        delay,
     )
     .await;
 }
 
+async fn mount_medium_shards_with_delay(server: &MockServer, count: usize, delay: Duration) {
+    let root = "/runs/200/medium";
+    let shard_names = (0..count)
+        .map(|index| format!("{index:02}"))
+        .collect::<Vec<_>>();
+    let planned_index = shard_names
+        .iter()
+        .map(|shard| format!("<a href=\"{shard}.list\">{shard}.list</a>"))
+        .collect::<String>();
+    let shard_index = shard_names
+        .iter()
+        .map(|shard| format!("<a href=\"{shard}/\">{shard}/</a>"))
+        .collect::<String>();
+    let plan_table = shard_names
+        .iter()
+        .map(|shard| format!("{shard}\t1\t1\t1.0\n"))
+        .collect::<String>();
+    mount(
+        server,
+        &format!("{root}/plan/split.meta"),
+        &format!(
+            "total={count}\nunits={count}\npar={count}\ntimed=0\ntc_sha='{TC_SHA}'\ntc_branch='develop'\n"
+        ),
+        Some(delay),
+    )
+    .await;
+    mount(
+        server,
+        &format!("{root}/plan/shards/"),
+        &planned_index,
+        Some(delay),
+    )
+    .await;
+    mount(
+        server,
+        &format!("{root}/plan/plan.tsv"),
+        &plan_table,
+        Some(delay),
+    )
+    .await;
+    mount(server, &format!("{root}/shard/"), &shard_index, Some(delay)).await;
+    mount(
+        server,
+        &format!("{root}/collect/failed.list"),
+        "",
+        Some(delay),
+    )
+    .await;
+    mount(
+        server,
+        &format!("{root}/collect/verdict"),
+        "pass\n",
+        Some(delay),
+    )
+    .await;
+    for shard in shard_names {
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/build.read"),
+            &format!("sha={SHA}\nmode=debug\nns=develop\nrun_id=200\nrun_attempt=1\n"),
+            Some(delay),
+        )
+        .await;
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/tc.read"),
+            &format!("tc_sha={TC_SHA}\ntc_branch=develop\n"),
+            Some(delay),
+        )
+        .await;
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/summary_info"),
+            &format!("case-{shard}.sql:ok 10ms\n"),
+            Some(delay),
+        )
+        .await;
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/shard.done"),
+            &format!("suite=medium\nidx={shard}\nassigned=1\nctp_rc=0\n"),
+            Some(delay),
+        )
+        .await;
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/test-results/"),
+            "<a href=\"results.xml\">results.xml</a>",
+            Some(delay),
+        )
+        .await;
+        mount(
+            server,
+            &format!("{root}/shard/{shard}/test-results/results.xml"),
+            &format!(
+                "<testsuite tests=\"1\"><testcase name=\"case-{shard}.sql\" time=\"0.01\"/></testsuite>"
+            ),
+            Some(delay),
+        )
+        .await;
+    }
+}
+
 async fn mount_shell(server: &MockServer) {
-    mount_common(server, 300, "shell", "00\tshell/foo/cases/foo.sh\n", 250).await;
+    mount_shell_with_optional_delay(server, None).await;
+}
+
+async fn mount_shell_with_delay(server: &MockServer, delay: Duration) {
+    mount_shell_with_optional_delay(server, Some(delay)).await;
+}
+
+async fn mount_shell_with_optional_delay(server: &MockServer, delay: Option<Duration>) {
+    mount_common(
+        server,
+        300,
+        "shell",
+        "00\tshell/foo/cases/foo.sh\n",
+        250,
+        delay,
+    )
+    .await;
     mount(
         server,
         "/runs/300/shell/shard/00/test_status.data",
@@ -235,6 +452,7 @@ async fn mount_shell(server: &MockServer) {
             "total_fail_case_count=1\n",
             "total_skip_case_count=0\n"
         ),
+        delay,
     )
     .await;
     mount(
@@ -245,12 +463,21 @@ async fn mount_shell(server: &MockServer) {
             "<testcase name=\"shell/foo/cases/foo.sh\"><failure><![CDATA[assert failed]]></failure></testcase>",
             "</testsuite>"
         ),
+        delay,
     )
     .await;
 }
 
 async fn mount_large_shell(server: &MockServer) {
-    mount_common(server, 300, "shell", "00\tshell/foo/cases/foo.sh\n", 250).await;
+    mount_common(
+        server,
+        300,
+        "shell",
+        "00\tshell/foo/cases/foo.sh\n",
+        250,
+        None,
+    )
+    .await;
     mount(
         server,
         "/runs/300/shell/shard/00/test_status.data",
@@ -262,6 +489,7 @@ async fn mount_large_shell(server: &MockServer) {
             "total_fail_case_count=1\n",
             "total_skip_case_count=0\n"
         ),
+        None,
     )
     .await;
     let xml = format!(
@@ -272,6 +500,7 @@ async fn mount_large_shell(server: &MockServer) {
         server,
         "/runs/300/shell/shard/00/test-results/test-shell.xml",
         &xml,
+        None,
     )
     .await;
 }
@@ -282,22 +511,37 @@ async fn mount_common(
     suite: &str,
     failed: &str,
     build_run_id: u64,
+    delay: Option<Duration>,
 ) {
     let root = format!("/runs/{run_id}/{suite}");
     mount(
         server,
         &format!("{root}/plan/split.meta"),
         &format!("total=1\nunits=1\npar=1\ntimed=0\ntc_sha='{TC_SHA}'\ntc_branch='develop'\n"),
+        delay,
     )
     .await;
     mount(
         server,
         &format!("{root}/plan/shards/"),
         "<a href=\"00.list\">00.list</a>",
+        delay,
     )
     .await;
-    mount(server, &format!("{root}/plan/plan.tsv"), "00\t1\t1\t1.0\n").await;
-    mount(server, &format!("{root}/shard/"), "<a href=\"00/\">00/</a>").await;
+    mount(
+        server,
+        &format!("{root}/plan/plan.tsv"),
+        "00\t1\t1\t1.0\n",
+        delay,
+    )
+    .await;
+    mount(
+        server,
+        &format!("{root}/shard/"),
+        "<a href=\"00/\">00/</a>",
+        delay,
+    )
+    .await;
     mount(
         server,
         &format!("{root}/shard/00/test-results/"),
@@ -306,9 +550,16 @@ async fn mount_common(
         } else {
             "<a href=\"results.xml\">results.xml</a>"
         },
+        delay,
     )
     .await;
-    mount(server, &format!("{root}/collect/failed.list"), failed).await;
+    mount(
+        server,
+        &format!("{root}/collect/failed.list"),
+        failed,
+        delay,
+    )
+    .await;
     mount(
         server,
         &format!("{root}/collect/verdict"),
@@ -317,32 +568,40 @@ async fn mount_common(
         } else {
             "fail\n"
         },
+        delay,
     )
     .await;
     mount(
         server,
         &format!("{root}/shard/00/build.read"),
         &format!("sha={SHA}\nmode=debug\nns=develop\nrun_id={build_run_id}\nrun_attempt=1\n"),
+        delay,
     )
     .await;
     mount(
         server,
         &format!("{root}/shard/00/tc.read"),
         &format!("tc_sha={TC_SHA}\ntc_branch=develop\n"),
+        delay,
     )
     .await;
     mount(
         server,
         &format!("{root}/shard/00/shard.done"),
         &format!("suite={suite}\nidx=00\nassigned=1\nctp_rc=0\n"),
+        delay,
     )
     .await;
 }
 
-async fn mount(server: &MockServer, url_path: &str, body: &str) {
+async fn mount(server: &MockServer, url_path: &str, body: &str, delay: Option<Duration>) {
+    let mut response = ResponseTemplate::new(200).set_body_string(body);
+    if let Some(delay) = delay {
+        response = response.set_delay(delay);
+    }
     Mock::given(method("GET"))
         .and(path(url_path))
-        .respond_with(ResponseTemplate::new(200).set_body_string(body))
+        .respond_with(response)
         .mount(server)
         .await;
 }

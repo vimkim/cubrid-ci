@@ -66,7 +66,13 @@ fn explicit_pr_url_and_commit_resolve_identity() {
         .output()
         .unwrap();
 
-    assert_eq!(output.status.code(), Some(3));
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     assert_eq!(
         result["pr"]["url"],
@@ -132,7 +138,16 @@ fn wrong_sha_suite_status_publishes_integrity_failure() {
 #[test]
 fn actions_api_failure_publishes_remote_failure() {
     let fixture = Fixture::new(status_snapshot(SHA, true));
-    write_command(fixture.commands.path(), "gh", "exit 1");
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *) exit 1 ;;
+esac"#
+        ),
+    );
 
     let output = fixture.command(&[]).output().unwrap();
 
@@ -144,6 +159,41 @@ fn actions_api_failure_publishes_remote_failure() {
     );
     assert_eq!(result["errors"][0]["kind"], "remote");
     assert_eq!(fixture.manifest(), result);
+}
+
+#[test]
+fn suites_from_one_actions_run_share_the_execution_lookup() {
+    let mut snapshot = status_snapshot(SHA, true);
+    for suite in ["test_sql", "test_shell"] {
+        let mut check = snapshot["checks"][0].clone();
+        check["name"] = json!(format!("gha-ci: {suite}"));
+        snapshot["checks"].as_array_mut().unwrap().push(check);
+    }
+    let fixture = Fixture::new(snapshot);
+    let calls = fixture.commands.path().join("gh-calls");
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            calls.display()
+        ),
+    );
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let actions_run_calls = fs::read_to_string(calls)
+        .unwrap()
+        .lines()
+        .filter(|call| *call == "api repos/CUBRID/cubrid/actions/runs/123")
+        .count();
+    assert_eq!(actions_run_calls, 1);
 }
 
 #[test]
@@ -169,6 +219,65 @@ fn wait_timeout_is_nonzero_and_preserves_the_running_execution() {
     assert_eq!(result["suites"]["test_medium"]["state"], "running");
     assert_eq!(result["suites"]["test_medium"]["execution"]["run_id"], 123);
     assert_eq!(fixture.manifest(), result);
+}
+
+#[test]
+fn interactive_collection_reports_progress_on_one_stderr_line() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+    write_command(
+        fixture.commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/sleep 0.1\n/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot(SHA, true)).unwrap()
+        ),
+    );
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#
+        ),
+    );
+    let stdout = fixture.data.path().join("stdout.json");
+    let command = format!(
+        "env -u CUBRID_CI_DATA_DIR -u CUBRID_CI_ARTIFACT_BASE PATH={} CUBRID_CI_CONFIG={} {} collect --json --data-dir {} > {}",
+        fixture.commands.path().display(),
+        missing_config_path().display(),
+        env!("CARGO_BIN_EXE_cubrid-ci"),
+        fixture.data.path().display(),
+        stdout.display(),
+    );
+    let command = format!("/bin/sh -c '{command}'");
+
+    let output = Command::new("script")
+        .current_dir(fixture.worktree.path())
+        .args(["-qefc", &command, "/dev/null"])
+        .output()
+        .unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "terminal output: {}\nscript stderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let progress = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        progress.contains("Collecting ["),
+        "terminal stderr did not contain collection progress: {progress:?}"
+    );
+    assert!(
+        !progress.contains('\n'),
+        "terminal progress used multiple lines: {progress:?}"
+    );
+    let result: Value = serde_json::from_slice(&fs::read(stdout).unwrap()).unwrap();
+    assert_eq!(result["suites"]["test_medium"]["state"], "running");
 }
 
 #[test]
@@ -211,6 +320,7 @@ impl Fixture {
             commands.path(),
             "gh",
             r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{"number":7990,"head":{"sha":"1111111111111111111111111111111111111111"}}' ;;
   *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
   *) exit 64 ;;
 esac"#,

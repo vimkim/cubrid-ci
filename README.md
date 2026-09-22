@@ -47,6 +47,10 @@ test counts. For example, a red suite may appear as
 still exits successfully. Use `--json` when a stable machine-readable result is
 required.
 
+When stderr is an interactive terminal, collection progress is rendered in
+place on one stderr line. Redirected stderr and stdout remain free of progress
+output, so `--json` continues to emit one machine-readable value on stdout.
+
 | Exit | Meaning |
 |---:|---|
 | 0 | Requested terminal evidence was validated and collected |

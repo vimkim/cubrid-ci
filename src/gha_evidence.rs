@@ -3,8 +3,9 @@ use std::fs;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
+use std::sync::{Arc, Mutex};
 
-use futures_util::StreamExt;
+use futures_util::{StreamExt, TryStreamExt, stream};
 use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
@@ -58,7 +59,7 @@ impl SuiteLayout {
     }
 }
 
-pub struct SuiteRequest<'a> {
+pub(crate) struct SuiteRequest<'a> {
     pub suite: Suite,
     pub run_id: u64,
     pub attempt: u64,
@@ -67,6 +68,8 @@ pub struct SuiteRequest<'a> {
     pub artifact_base: Option<&'a Url>,
     pub evidence_dir: &'a Path,
     pub status_snapshot_json: &'a [u8],
+    pub run_json: &'a [u8],
+    pub run_context: &'a Mutex<Option<Arc<RunContext>>>,
     pub include_binaries: bool,
     pub max_binary_bytes: u64,
     pub binary_bytes_remaining: &'a mut u64,
@@ -175,7 +178,18 @@ struct JunitCase {
     skipped: bool,
 }
 
-pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, AppError> {
+struct FetchedShard {
+    name: String,
+    root: Url,
+    build_text: String,
+    testcase_text: String,
+    workflow_result: String,
+    shard_done: String,
+    results_index: String,
+    junit: Vec<(String, String)>,
+}
+
+pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, AppError> {
     let layout = SuiteLayout::for_suite(request.suite);
     let execution_suite_dir = request
         .evidence_dir
@@ -213,8 +227,8 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         &String::from_utf8_lossy(request.status_snapshot_json),
     )?;
     let run_endpoint = format!("repos/CUBRID/cubrid/actions/runs/{}", request.run_id);
-    let run_json = gh_output(&run_endpoint)?;
-    let run: ActionRun = serde_json::from_slice(&run_json).map_err(|source| AppError::Json {
+    let run_json = request.run_json;
+    let run: ActionRun = serde_json::from_slice(run_json).map_err(|source| AppError::Json {
         endpoint: run_endpoint,
         source,
     })?;
@@ -225,15 +239,28 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
     }
     write_string_immutable(
         &provider_raw.join("github/run.json"),
-        &String::from_utf8_lossy(&run_json),
+        &String::from_utf8_lossy(run_json),
     )?;
-    let resolution = resolve_artifact_base(
-        request.run_id,
-        request.attempt,
-        layout.remote_name,
-        request.artifact_base,
-        &provider_raw,
-    )?;
+    let run_context = {
+        let mut cached = request
+            .run_context
+            .lock()
+            .map_err(|_| AppError::Remote("shared Actions run context lock poisoned".to_owned()))?;
+        if let Some(context) = cached.as_ref() {
+            context.clone()
+        } else {
+            let context = Arc::new(load_run_context(
+                request.run_id,
+                request.attempt,
+                layout.remote_name,
+                request.artifact_base,
+                &provider_raw,
+            )?);
+            *cached = Some(context.clone());
+            context
+        }
+    };
+    let resolution = resolve_artifact_base(&run_context, layout.remote_name, &provider_raw)?;
     let artifact_base = resolution.base;
     validate_artifact_base(&artifact_base)?;
     let client = Client::builder()
@@ -359,6 +386,106 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
         ));
     }
 
+    let suite = request.suite;
+    let shard_fetches = shard_names.into_iter().map(|shard| {
+        let shard_root = run_root.join(&format!("shard/{shard}/")).unwrap();
+        let client = &client;
+        let jobs = &resolution.jobs;
+        let provider_raw = &provider_raw;
+        async move {
+            let build_text = classify_pipeline_fetch(
+                fetch_text(
+                    client,
+                    shard_root.join("build.read").unwrap(),
+                    MAX_INDEX_BYTES,
+                )
+                .await,
+                jobs,
+                provider_raw,
+                &format!("shard {shard} build provenance"),
+                false,
+            )?;
+            let testcase_text = classify_pipeline_fetch(
+                fetch_text(client, shard_root.join("tc.read").unwrap(), MAX_INDEX_BYTES).await,
+                jobs,
+                provider_raw,
+                &format!("shard {shard} testcase provenance"),
+                false,
+            )?;
+            let workflow_result = classify_pipeline_fetch(
+                fetch_text(
+                    client,
+                    shard_root.join(layout.result_file).unwrap(),
+                    MAX_TEXT_BYTES,
+                )
+                .await,
+                jobs,
+                provider_raw,
+                &format!("shard {shard} workflow result"),
+                true,
+            )?;
+            let shard_done = classify_pipeline_fetch(
+                fetch_text(
+                    client,
+                    shard_root.join("shard.done").unwrap(),
+                    MAX_INDEX_BYTES,
+                )
+                .await,
+                jobs,
+                provider_raw,
+                &format!("shard {shard} completion record"),
+                true,
+            )?;
+            let results_index = classify_pipeline_fetch(
+                fetch_text(
+                    client,
+                    shard_root.join("test-results/").unwrap(),
+                    MAX_INDEX_BYTES,
+                )
+                .await,
+                jobs,
+                provider_raw,
+                &format!("shard {shard} test-result index"),
+                true,
+            )?;
+            let junit_names = directory_entries(&results_index, false)?
+                .into_iter()
+                .filter(|name| name.ends_with(".xml"))
+                .collect::<Vec<_>>();
+            if junit_names.is_empty() {
+                return job_level_failure(
+                    format!("shard {shard} has no {suite} JUnit XML"),
+                    jobs,
+                    provider_raw,
+                );
+            }
+            let junit = stream::iter(junit_names.into_iter().map(|file| {
+                let url = shard_root.join(&format!("test-results/{file}")).unwrap();
+                async move {
+                    let xml = fetch_text(client, url, MAX_JUNIT_BYTES).await?;
+                    Ok::<_, AppError>((file, xml))
+                }
+            }))
+            .buffered(4)
+            .try_collect()
+            .await?;
+            Ok::<_, AppError>(FetchedShard {
+                name: shard,
+                root: shard_root,
+                build_text,
+                testcase_text,
+                workflow_result,
+                shard_done,
+                results_index,
+                junit,
+            })
+        }
+    });
+    let fetched_shards = stream::iter(shard_fetches)
+        .buffered(10)
+        .try_collect::<Vec<_>>()
+        .await?;
+
     let failed_inventory = parse_failed_list(&failed_list)?;
     let failed_inventory_count = failed_inventory.len() as u64;
     let mut inventory_by_shard: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
@@ -383,32 +510,17 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
     let mut workflow_skipped = 0_u64;
     let mut binary_records = Vec::new();
 
-    for shard in shard_names {
-        let shard_root = run_root.join(&format!("shard/{shard}/")).unwrap();
-        let build_text = classify_pipeline_fetch(
-            fetch_text(
-                &client,
-                shard_root.join("build.read").unwrap(),
-                MAX_INDEX_BYTES,
-            )
-            .await,
-            &resolution.jobs,
-            &provider_raw,
-            &format!("shard {shard} build provenance"),
-            false,
-        )?;
-        let testcase_text = classify_pipeline_fetch(
-            fetch_text(
-                &client,
-                shard_root.join("tc.read").unwrap(),
-                MAX_INDEX_BYTES,
-            )
-            .await,
-            &resolution.jobs,
-            &provider_raw,
-            &format!("shard {shard} testcase provenance"),
-            false,
-        )?;
+    for fetched in fetched_shards {
+        let FetchedShard {
+            name: shard,
+            root: shard_root,
+            build_text,
+            testcase_text,
+            workflow_result,
+            shard_done,
+            results_index,
+            junit,
+        } = fetched;
         write_string_immutable(
             &provider_raw.join(format!("shards/{shard}/build.read")),
             &build_text,
@@ -457,30 +569,6 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             )));
         }
 
-        let workflow_result = classify_pipeline_fetch(
-            fetch_text(
-                &client,
-                shard_root.join(layout.result_file).unwrap(),
-                MAX_TEXT_BYTES,
-            )
-            .await,
-            &resolution.jobs,
-            &provider_raw,
-            &format!("shard {shard} workflow result"),
-            true,
-        )?;
-        let shard_done = classify_pipeline_fetch(
-            fetch_text(
-                &client,
-                shard_root.join("shard.done").unwrap(),
-                MAX_INDEX_BYTES,
-            )
-            .await,
-            &resolution.jobs,
-            &provider_raw,
-            &format!("shard {shard} completion record"),
-            true,
-        )?;
         write_string_immutable(
             &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
             &workflow_result,
@@ -536,42 +624,17 @@ pub async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, Ap
             .await?;
         }
 
-        let results_index = classify_pipeline_fetch(
-            fetch_text(
-                &client,
-                shard_root.join("test-results/").unwrap(),
-                MAX_INDEX_BYTES,
-            )
-            .await,
-            &resolution.jobs,
-            &provider_raw,
-            &format!("shard {shard} test-result index"),
-            true,
-        )?;
         write_string_immutable(
             &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
             &results_index,
         )?;
-        let junit_files = directory_entries(&results_index, false)?
-            .into_iter()
-            .filter(|name| name.ends_with(".xml"))
+        let junit_files = junit
+            .iter()
+            .map(|(file, _)| file.clone())
             .collect::<Vec<_>>();
-        if junit_files.is_empty() {
-            return job_level_failure(
-                format!("shard {shard} has no {} JUnit XML", request.suite),
-                &resolution.jobs,
-                &provider_raw,
-            );
-        }
 
         let mut junit_shard_counts = WorkflowCounts::default();
-        for file in &junit_files {
-            let xml = fetch_text(
-                &client,
-                shard_root.join(&format!("test-results/{file}")).unwrap(),
-                MAX_JUNIT_BYTES,
-            )
-            .await?;
+        for (file, xml) in junit {
             write_string_immutable(&provider_raw.join(format!("shards/{shard}/{file}")), &xml)?;
             for case in parse_junit(&xml)? {
                 counts.tests += 1;
@@ -923,14 +986,48 @@ struct EvidenceResolution {
     jobs: Vec<ActionJob>,
 }
 
+pub(crate) struct RunContext {
+    base: Url,
+    jobs: Vec<ActionJob>,
+    job_pages: Vec<(String, Vec<u8>)>,
+    collect_log: Option<Vec<u8>>,
+}
+
+struct LoadedJobs {
+    jobs: Vec<ActionJob>,
+    pages: Vec<(String, Vec<u8>)>,
+}
+
 fn resolve_artifact_base(
+    context: &RunContext,
+    suite: &str,
+    provider_raw: &Path,
+) -> Result<EvidenceResolution, AppError> {
+    retain_run_context(context, provider_raw)?;
+    let diagnostic_jobs = context
+        .jobs
+        .iter()
+        .filter(|job| job_is_relevant_to_suite(job, suite))
+        .cloned()
+        .collect::<Vec<_>>();
+    Ok(EvidenceResolution {
+        base: context.base.clone(),
+        jobs: diagnostic_jobs,
+    })
+}
+
+fn load_run_context(
     run_id: u64,
     attempt: u64,
     suite: &str,
     configured: Option<&Url>,
     provider_raw: &Path,
-) -> Result<EvidenceResolution, AppError> {
-    let jobs = load_jobs(run_id, provider_raw)?;
+) -> Result<RunContext, AppError> {
+    let LoadedJobs {
+        jobs,
+        pages: job_pages,
+    } = load_jobs(run_id)?;
+    retain_job_pages(&job_pages, provider_raw)?;
     let selected_jobs = jobs
         .into_iter()
         .filter(|job| job.run_attempt == attempt)
@@ -951,9 +1048,11 @@ fn resolve_artifact_base(
             )))
         })?;
     if let Some(configured) = configured {
-        return Ok(EvidenceResolution {
+        return Ok(RunContext {
             base: configured.clone(),
-            jobs: diagnostic_jobs,
+            jobs: selected_jobs,
+            job_pages,
+            collect_log: None,
         });
     }
     let collect_job_id = collect_job.id;
@@ -976,7 +1075,7 @@ fn resolve_artifact_base(
         &provider_raw.join("github/collect.log"),
         &sanitize_log(&String::from_utf8_lossy(&output)),
     )?;
-    let log = String::from_utf8(output)
+    let log = String::from_utf8(output.clone())
         .map_err(|_| AppError::Remote("collect-job log is not UTF-8".to_owned()))?;
     let capture = Regex::new(r"(?m)ARTIFACT_URL_BASE(?::|=)\s*(https?://[^\s]+)")
         .expect("valid artifact URL regex")
@@ -1000,14 +1099,38 @@ fn resolve_artifact_base(
     if !url.path().ends_with('/') {
         url.set_path(&format!("{}/", url.path()));
     }
-    Ok(EvidenceResolution {
+    Ok(RunContext {
         base: url,
-        jobs: diagnostic_jobs,
+        jobs: selected_jobs,
+        job_pages,
+        collect_log: Some(output),
     })
 }
 
-fn load_jobs(run_id: u64, provider_raw: &Path) -> Result<Vec<ActionJob>, AppError> {
+fn retain_run_context(context: &RunContext, provider_raw: &Path) -> Result<(), AppError> {
+    retain_job_pages(&context.job_pages, provider_raw)?;
+    if let Some(log) = &context.collect_log {
+        write_string_immutable(
+            &provider_raw.join("github/collect.log"),
+            &sanitize_log(&String::from_utf8_lossy(log)),
+        )?;
+    }
+    Ok(())
+}
+
+fn retain_job_pages(job_pages: &[(String, Vec<u8>)], provider_raw: &Path) -> Result<(), AppError> {
+    for (name, json) in job_pages {
+        write_string_immutable(
+            &provider_raw.join("github").join(name),
+            &String::from_utf8_lossy(json),
+        )?;
+    }
+    Ok(())
+}
+
+fn load_jobs(run_id: u64) -> Result<LoadedJobs, AppError> {
     let mut all_jobs = Vec::new();
+    let mut pages = Vec::new();
     let mut page = 1_u64;
     loop {
         let endpoint = format!(
@@ -1019,14 +1142,11 @@ fn load_jobs(run_id: u64, provider_raw: &Path) -> Result<Vec<ActionJob>, AppErro
         } else {
             format!("jobs-page-{page}.json")
         };
-        write_string_immutable(
-            &provider_raw.join("github").join(name),
-            &String::from_utf8_lossy(&json),
-        )?;
         let response: JobsResponse =
             serde_json::from_slice(&json).map_err(|source| AppError::Json { endpoint, source })?;
         let page_count = response.jobs.len();
         all_jobs.extend(response.jobs);
+        pages.push((name, json));
         let complete = response
             .total_count
             .is_none_or(|total| all_jobs.len() as u64 >= total);
@@ -1040,7 +1160,10 @@ fn load_jobs(run_id: u64, provider_raw: &Path) -> Result<Vec<ActionJob>, AppErro
             ));
         }
     }
-    Ok(all_jobs)
+    Ok(LoadedJobs {
+        jobs: all_jobs,
+        pages,
+    })
 }
 
 fn classify_pipeline_fetch(
