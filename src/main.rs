@@ -23,6 +23,7 @@ async fn main() -> ExitCode {
         let config = match ResolvedConfig::load(ConfigOverride {
             data_dir: args.data_dir.clone(),
             artifact_base: args.artifact_base.clone(),
+            fetch_concurrency: args.fetch_concurrency,
         }) {
             Ok(config) => config,
             Err(error) => {
@@ -48,7 +49,9 @@ async fn main() -> ExitCode {
 
     if let Commands::Collect(args) = &cli.command {
         let progress = TerminalProgress::new(cli.verbose == 0);
-        return match cubrid_ci::gha_collect::run_with_progress(args, &progress).await {
+        let collection = cubrid_ci::gha_collect::run_with_progress(args, &progress).await;
+        progress.clear();
+        return match collection {
             Ok(result) => {
                 if cli.json {
                     match serde_json::to_string_pretty(&result) {

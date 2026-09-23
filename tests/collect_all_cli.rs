@@ -1,17 +1,19 @@
+mod support;
+
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
-use std::sync::Mutex;
-use std::time::{Duration, Instant};
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 
+use support::HttpProxy;
+
 const SHA: &str = "1111111111111111111111111111111111111111";
 const TC_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
-static TIMING_TEST: Mutex<()> = Mutex::new(());
 
 #[tokio::test(flavor = "multi_thread")]
 async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
@@ -28,6 +30,11 @@ async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
         .unwrap();
 
     assert_eq!(output.status.code(), Some(3));
+    assert!(
+        output.stderr.is_empty(),
+        "non-TTY JSON collection wrote stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
     validate_schema(
         include_str!("../schema/command-result-v2.schema.json"),
@@ -95,6 +102,11 @@ async fn human_output_reports_ci_outcomes_and_test_counts() {
     let output = command(commands.path(), data.path()).output().unwrap();
 
     assert_eq!(output.status.code(), Some(3));
+    assert!(
+        output.stderr.is_empty(),
+        "non-TTY human collection wrote stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(
         stdout.contains("test_medium: SUCCESS (0 failed / 1 executed)"),
@@ -110,53 +122,286 @@ async fn human_output_reports_ci_outcomes_and_test_counts() {
 #[tokio::test(flavor = "multi_thread")]
 async fn independent_terminal_suites_are_collected_concurrently() {
     let server = MockServer::start().await;
-    let delay = Duration::from_millis(150);
-    mount_medium_with_delay(&server, delay).await;
-    mount_shell_with_delay(&server, delay).await;
+    mount_medium(&server).await;
+    mount_shell(&server).await;
+    let (proxy, gate) = HttpProxy::start_gated(*server.address(), "/plan/split.meta");
     let commands = tempfile::tempdir().unwrap();
-    write_commands(commands.path(), &server);
+    write_commands_with_base(commands.path(), &proxy.uri());
     let data = tempfile::tempdir().unwrap();
 
-    let _timing_guard = TIMING_TEST
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let started = Instant::now();
-    let output = command(commands.path(), data.path())
+    let mut child = command(commands.path(), data.path())
         .arg("--json")
-        .output()
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
         .unwrap();
-    let elapsed = started.elapsed();
+
+    if !gate.wait_for_arrivals(2, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("two terminal suites did not reach the response barrier concurrently");
+    }
+    gate.release_all();
+    let output = child.wait_with_output().unwrap();
 
     assert_eq!(output.status.code(), Some(3));
-    assert!(
-        elapsed < Duration::from_millis(3000),
-        "independent suites took {elapsed:?}; expected their provider waits to overlap"
-    );
+    assert!(proxy.maximum() >= 2);
 }
 
 #[tokio::test(flavor = "multi_thread")]
 async fn independent_shards_are_fetched_concurrently() {
     let server = MockServer::start().await;
-    let delay = Duration::from_millis(150);
-    mount_medium_shards_with_delay(&server, 4, delay).await;
+    mount_medium_shards(&server, 4, None, &[]).await;
+    let (proxy, gate) = HttpProxy::start_gated(*server.address(), "/build.read");
     let commands = tempfile::tempdir().unwrap();
-    write_commands(commands.path(), &server);
+    write_commands_with_base(commands.path(), &proxy.uri());
     let data = tempfile::tempdir().unwrap();
 
-    let _timing_guard = TIMING_TEST
-        .lock()
-        .unwrap_or_else(|error| error.into_inner());
-    let started = Instant::now();
-    let output = command(commands.path(), data.path())
+    let mut child = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--fetch-concurrency",
+            "10",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    if !gate.wait_for_arrivals(2, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("two shards did not reach the response barrier concurrently");
+    }
+    gate.release_all();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(output.status.success());
+    assert!(proxy.maximum() >= 2);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn configured_fetch_concurrency_is_shared_across_suites() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    mount_shell(&server).await;
+    let (proxy, gate) = HttpProxy::start_gated(*server.address(), "/plan/split.meta");
+    let commands = tempfile::tempdir().unwrap();
+    write_commands_with_base(commands.path(), &proxy.uri());
+    let data = tempfile::tempdir().unwrap();
+
+    let mut child = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--suite",
+            "test_shell",
+            "--fetch-concurrency",
+            "1",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    if !gate.wait_for_arrivals(1, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("first suite did not reach the response barrier");
+    }
+    assert_eq!(proxy.maximum(), 1);
+    gate.release_one();
+    if !gate.wait_for_arrivals(2, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("second suite did not reach the response barrier after one release");
+    }
+    assert_eq!(proxy.maximum(), 1);
+    gate.release_all();
+    let output = child.wait_with_output().unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(proxy.maximum(), 1);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn completed_shard_raw_evidence_survives_a_later_shard_failure() {
+    let server = MockServer::start().await;
+    mount_medium_shards(&server, 12, None, &["01", "02"]).await;
+    let (proxy, gate) = HttpProxy::start_gated(*server.address(), "/tc.read");
+    let commands = tempfile::tempdir().unwrap();
+    write_commands_with_base(commands.path(), &proxy.uri());
+    let data = tempfile::tempdir().unwrap();
+
+    let mut child = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--fetch-concurrency",
+            "10",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if !gate.wait_for_arrivals(10, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("the initial shard window did not reach the testcase-response barrier");
+    }
+    gate.release_all();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let suite = output_dir.join("providers/github-actions/runs/200/attempts/1/test_medium");
+    assert!(suite.join("raw/shards/00/results.xml").is_file());
+    assert!(!suite.join("summary.json").exists());
+    let observation = fs::read_dir(output_dir.join("observations"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let observation_result: Value =
+        serde_json::from_slice(&fs::read(observation.join("result.json")).unwrap()).unwrap();
+    let shards = &observation_result["acquisition"]["test_medium"]["shards"];
+    assert_eq!(shards["00"]["state"], "retained");
+    assert_eq!(shards["01"]["state"], "failed");
+    assert_eq!(shards["01"]["stage"], "testcase_provenance");
+    assert_eq!(shards["02"]["state"], "failed");
+    assert_eq!(shards["10"]["state"], "not_attempted");
+    assert_eq!(shards["11"]["state"], "not_attempted");
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 8)]
+async fn suite_failure_stops_later_shard_scheduling_across_suites() {
+    let server = MockServer::start().await;
+    mount_medium_shards(&server, 4, None, &[]).await;
+    mount_shell(&server).await;
+    let shell_plan = "/runs/300/shell/plan/plan.tsv";
+    let (failure_proxy, failure_gate) =
+        HttpProxy::start_gated_truncated(*server.address(), shell_plan, b"00\t".to_vec());
+    let (proxy, shard_gate) = HttpProxy::start_gated(failure_proxy.address(), "/tc.read");
+    let commands = tempfile::tempdir().unwrap();
+    write_commands_with_base(commands.path(), &proxy.uri());
+    let data = tempfile::tempdir().unwrap();
+
+    let mut child = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--suite",
+            "test_shell",
+            "--fetch-concurrency",
+            "3",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    if !failure_gate.wait_for_arrivals(1, Duration::from_secs(5))
+        || !shard_gate.wait_for_arrivals(2, Duration::from_secs(5))
+    {
+        failure_gate.release_all();
+        shard_gate.release_all();
+        let _ = child.kill();
+        panic!("suite failure and the initial cross-suite shard window were not both in flight");
+    }
+    failure_gate.release_all();
+    if !shard_gate.wait_for_arrivals(3, Duration::from_secs(5)) {
+        shard_gate.release_all();
+        let _ = child.kill();
+        panic!("the already-scheduled third shard did not drain after the suite failure");
+    }
+    shard_gate.release_all();
+    let output = child.wait_with_output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let observation =
+        fs::read_dir(PathBuf::from(result["output_dir"].as_str().unwrap()).join("observations"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+    let observation_result: Value =
+        serde_json::from_slice(&fs::read(observation.join("result.json")).unwrap()).unwrap();
+    let medium = &observation_result["acquisition"]["test_medium"]["shards"];
+    assert_eq!(medium["00"]["state"], "retained");
+    assert_eq!(medium["01"]["state"], "retained");
+    assert_eq!(medium["02"]["state"], "retained");
+    assert_eq!(medium["03"]["state"], "not_attempted");
+    assert_eq!(
+        observation_result["acquisition"]["test_shell"]["errors"][0]["stage"],
+        "plan_table"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn interrupted_collection_rejects_tampered_retained_raw_evidence() {
+    let server = MockServer::start().await;
+    mount_medium_shards(&server, 12, None, &["01", "02"]).await;
+    let (proxy, gate) = HttpProxy::start_gated(*server.address(), "/tc.read");
+    let commands = tempfile::tempdir().unwrap();
+    write_commands_with_base(commands.path(), &proxy.uri());
+    let data = tempfile::tempdir().unwrap();
+
+    let mut child = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--fetch-concurrency",
+            "10",
+            "--json",
+        ])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    if !gate.wait_for_arrivals(10, Duration::from_secs(5)) {
+        gate.release_all();
+        let _ = child.kill();
+        panic!("the initial shard window did not reach the testcase-response barrier");
+    }
+    gate.release_all();
+    let first = child.wait_with_output().unwrap();
+    assert_eq!(first.status.code(), Some(5));
+    let first_result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    let retained = PathBuf::from(first_result["output_dir"].as_str().unwrap())
+        .join("providers/github-actions/runs/200/attempts/1/test_medium/raw/shards/00/results.xml");
+    fs::write(
+        &retained,
+        "<testsuite tests=\"1\"><testcase name=\"case-00.sql\" time=\"1.5\"/></testsuite>",
+    )
+    .unwrap();
+
+    let replay = command(commands.path(), data.path())
         .args(["--suite", "test_medium", "--json"])
         .output()
         .unwrap();
-    let elapsed = started.elapsed();
 
-    assert!(output.status.success());
+    assert_eq!(replay.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&replay.stdout).unwrap();
+    assert_eq!(result["errors"][0]["kind"], "integrity");
     assert!(
-        elapsed < Duration::from_millis(3000),
-        "independent shards took {elapsed:?}; expected their provider waits to overlap"
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("receipt")
     );
 }
 
@@ -174,6 +419,53 @@ async fn suites_from_one_run_share_actions_discovery() {
         .unwrap();
 
     assert!(output.status.success());
+    let calls = fs::read_to_string(commands.path().join("gh-calls")).unwrap();
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| call.contains("actions/runs/200/jobs"))
+            .count(),
+        1
+    );
+    assert_eq!(
+        calls
+            .lines()
+            .filter(|call| call.contains("actions/jobs/920/logs"))
+            .count(),
+        1
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn distinct_suites_from_one_run_share_successful_actions_discovery() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    mount_shell_for_run(&server, 200).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let mut snapshot = status_snapshot();
+    snapshot["checks"][2] = status("test_shell", "FAILURE", 200);
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&snapshot).unwrap()
+        ),
+    );
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path())
+        .args(["--suite", "test_medium", "--suite", "test_shell", "--json"])
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     let calls = fs::read_to_string(commands.path().join("gh-calls")).unwrap();
     assert_eq!(
         calls
@@ -226,6 +518,10 @@ fn command(commands: &Path, data: &Path) -> Command {
 }
 
 fn write_commands(commands: &Path, server: &MockServer) {
+    write_commands_with_base(commands, &server.uri());
+}
+
+fn write_commands_with_base(commands: &Path, artifact_base: &str) {
     write_command(
         commands,
         "cubrid-pr-status",
@@ -250,7 +546,7 @@ case "$*" in
   *) exit 64 ;;
 esac"#,
             commands.join("gh-calls").display(),
-            server.uri()
+            artifact_base
         ),
     );
 }
@@ -298,10 +594,6 @@ async fn mount_medium(server: &MockServer) {
     mount_medium_with_optional_delay(server, None).await;
 }
 
-async fn mount_medium_with_delay(server: &MockServer, delay: Duration) {
-    mount_medium_with_optional_delay(server, Some(delay)).await;
-}
-
 async fn mount_medium_with_optional_delay(server: &MockServer, delay: Option<Duration>) {
     mount_common(server, 200, "medium", "", 200, delay).await;
     mount(
@@ -320,7 +612,12 @@ async fn mount_medium_with_optional_delay(server: &MockServer, delay: Option<Dur
     .await;
 }
 
-async fn mount_medium_shards_with_delay(server: &MockServer, count: usize, delay: Duration) {
+async fn mount_medium_shards(
+    server: &MockServer,
+    count: usize,
+    delay: Option<Duration>,
+    failing_testcase_shards: &[&str],
+) {
     let root = "/runs/200/medium";
     let shard_names = (0..count)
         .map(|index| format!("{index:02}"))
@@ -343,98 +640,88 @@ async fn mount_medium_shards_with_delay(server: &MockServer, count: usize, delay
         &format!(
             "total={count}\nunits={count}\npar={count}\ntimed=0\ntc_sha='{TC_SHA}'\ntc_branch='develop'\n"
         ),
-        Some(delay),
+        delay,
     )
     .await;
     mount(
         server,
         &format!("{root}/plan/shards/"),
         &planned_index,
-        Some(delay),
+        delay,
     )
     .await;
-    mount(
-        server,
-        &format!("{root}/plan/plan.tsv"),
-        &plan_table,
-        Some(delay),
-    )
-    .await;
-    mount(server, &format!("{root}/shard/"), &shard_index, Some(delay)).await;
-    mount(
-        server,
-        &format!("{root}/collect/failed.list"),
-        "",
-        Some(delay),
-    )
-    .await;
-    mount(
-        server,
-        &format!("{root}/collect/verdict"),
-        "pass\n",
-        Some(delay),
-    )
-    .await;
+    mount(server, &format!("{root}/plan/plan.tsv"), &plan_table, delay).await;
+    mount(server, &format!("{root}/shard/"), &shard_index, delay).await;
+    mount(server, &format!("{root}/collect/failed.list"), "", delay).await;
+    mount(server, &format!("{root}/collect/verdict"), "pass\n", delay).await;
     for shard in shard_names {
         mount(
             server,
             &format!("{root}/shard/{shard}/build.read"),
             &format!("sha={SHA}\nmode=debug\nns=develop\nrun_id=200\nrun_attempt=1\n"),
-            Some(delay),
+            delay,
         )
         .await;
-        mount(
-            server,
-            &format!("{root}/shard/{shard}/tc.read"),
-            &format!("tc_sha={TC_SHA}\ntc_branch=develop\n"),
-            Some(delay),
-        )
-        .await;
+        if failing_testcase_shards.contains(&shard.as_str()) {
+            Mock::given(method("GET"))
+                .and(path(format!("{root}/shard/{shard}/tc.read")))
+                .respond_with(ResponseTemplate::new(503))
+                .mount(server)
+                .await;
+        } else {
+            mount(
+                server,
+                &format!("{root}/shard/{shard}/tc.read"),
+                &format!("tc_sha={TC_SHA}\ntc_branch=develop\n"),
+                delay,
+            )
+            .await;
+        }
         mount(
             server,
             &format!("{root}/shard/{shard}/summary_info"),
             &format!("case-{shard}.sql:ok 10ms\n"),
-            Some(delay),
+            delay,
         )
         .await;
         mount(
             server,
             &format!("{root}/shard/{shard}/shard.done"),
             &format!("suite=medium\nidx={shard}\nassigned=1\nctp_rc=0\n"),
-            Some(delay),
+            delay,
         )
         .await;
         mount(
             server,
             &format!("{root}/shard/{shard}/test-results/"),
             "<a href=\"results.xml\">results.xml</a>",
-            Some(delay),
+            delay,
         )
         .await;
-        mount(
-            server,
-            &format!("{root}/shard/{shard}/test-results/results.xml"),
-            &format!(
-                "<testsuite tests=\"1\"><testcase name=\"case-{shard}.sql\" time=\"0.01\"/></testsuite>"
-            ),
-            Some(delay),
-        )
-        .await;
+        let junit_path = format!("{root}/shard/{shard}/test-results/results.xml");
+        let junit = format!(
+            "<testsuite tests=\"1\"><testcase name=\"case-{shard}.sql\" time=\"0.01\"/></testsuite>"
+        );
+        mount(server, &junit_path, &junit, delay).await;
     }
 }
 
 async fn mount_shell(server: &MockServer) {
-    mount_shell_with_optional_delay(server, None).await;
+    mount_shell_for_run(server, 300).await;
 }
 
-async fn mount_shell_with_delay(server: &MockServer, delay: Duration) {
-    mount_shell_with_optional_delay(server, Some(delay)).await;
+async fn mount_shell_for_run(server: &MockServer, run_id: u64) {
+    mount_shell_for_run_with_optional_delay(server, run_id, None).await;
 }
 
-async fn mount_shell_with_optional_delay(server: &MockServer, delay: Option<Duration>) {
+async fn mount_shell_for_run_with_optional_delay(
+    server: &MockServer,
+    run_id: u64,
+    delay: Option<Duration>,
+) {
     mount_common(
         server,
-        300,
+        run_id,
         "shell",
         "00\tshell/foo/cases/foo.sh\n",
         250,
@@ -443,7 +730,7 @@ async fn mount_shell_with_optional_delay(server: &MockServer, delay: Option<Dura
     .await;
     mount(
         server,
-        "/runs/300/shell/shard/00/test_status.data",
+        &format!("/runs/{run_id}/shell/shard/00/test_status.data"),
         concat!(
             "#\n",
             "#Tue Sep 22 06:03:57 KST 2026\n",
@@ -457,7 +744,7 @@ async fn mount_shell_with_optional_delay(server: &MockServer, delay: Option<Dura
     .await;
     mount(
         server,
-        "/runs/300/shell/shard/00/test-results/test-shell.xml",
+        &format!("/runs/{run_id}/shell/shard/00/test-results/test-shell.xml"),
         concat!(
             "<testsuite tests=\"1\" failures=\"1\">",
             "<testcase name=\"shell/foo/cases/foo.sh\"><failure><![CDATA[assert failed]]></failure></testcase>",

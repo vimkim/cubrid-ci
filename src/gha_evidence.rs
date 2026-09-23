@@ -10,12 +10,16 @@ use regex::Regex;
 use reqwest::Client;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tokio::io::AsyncReadExt;
+use tokio::sync::Semaphore;
+use tokio_util::io::StreamReader;
 use url::Url;
 use walkdir::WalkDir;
 
 use crate::diff::{extract_diff, stable_test_id};
 use crate::error::AppError;
 use crate::model::Suite;
+use crate::observation::{AcquisitionLedger, AcquisitionStage};
 use crate::storage::{write_json_immutable, write_string_if_absent, write_string_immutable};
 
 const MAX_INDEX_BYTES: usize = 1024 * 1024;
@@ -69,10 +73,14 @@ pub(crate) struct SuiteRequest<'a> {
     pub evidence_dir: &'a Path,
     pub status_snapshot_json: &'a [u8],
     pub run_json: &'a [u8],
-    pub run_context: &'a Mutex<Option<Arc<RunContext>>>,
+    pub run_context: &'a RunContextCache,
+    pub fetch_permits: &'a Semaphore,
+    pub fetch_concurrency: usize,
+    pub acquisition: &'a AcquisitionLedger,
     pub include_binaries: bool,
     pub max_binary_bytes: u64,
     pub binary_bytes_remaining: &'a mut u64,
+    pub binary_consumption: &'a mut Vec<BinaryConsumption>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -138,13 +146,13 @@ pub struct FailureRecord {
     pub diff_path: Option<PathBuf>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct BinaryInventory {
     schema_version: u32,
     files: Vec<BinaryRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct BinaryRecord {
     shard: String,
     name: String,
@@ -152,6 +160,14 @@ struct BinaryRecord {
     reason: Option<String>,
     size_bytes: Option<u64>,
     sha256: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub(crate) struct BinaryConsumption {
+    pub suite: String,
+    pub shard: String,
+    pub name: String,
+    pub consumed_bytes: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -181,12 +197,78 @@ struct JunitCase {
 struct FetchedShard {
     name: String,
     root: Url,
-    build_text: String,
-    testcase_text: String,
-    workflow_result: String,
-    shard_done: String,
-    results_index: String,
-    junit: Vec<(String, String)>,
+    junit_files: Vec<String>,
+}
+
+struct ShardFetchError {
+    stage: AcquisitionStage,
+    endpoint: Option<String>,
+    consumed_bytes: u64,
+    error: AppError,
+}
+
+struct FetchFailure {
+    endpoint: String,
+    consumed_bytes: u64,
+    error: AppError,
+}
+
+impl FetchFailure {
+    fn new(endpoint: &Url, consumed_bytes: u64, error: AppError) -> Self {
+        Self {
+            endpoint: endpoint.to_string(),
+            consumed_bytes,
+            error,
+        }
+    }
+}
+
+impl From<FetchFailure> for AppError {
+    fn from(failure: FetchFailure) -> Self {
+        failure.error
+    }
+}
+
+fn at_stage<T>(stage: AcquisitionStage, result: Result<T, AppError>) -> Result<T, ShardFetchError> {
+    result.map_err(|error| ShardFetchError {
+        stage,
+        endpoint: None,
+        consumed_bytes: 0,
+        error,
+    })
+}
+
+fn at_fetch_stage<T>(
+    stage: AcquisitionStage,
+    result: Result<T, FetchFailure>,
+) -> Result<T, ShardFetchError> {
+    result.map_err(|failure| ShardFetchError {
+        stage,
+        endpoint: Some(failure.endpoint),
+        consumed_bytes: failure.consumed_bytes,
+        error: failure.error,
+    })
+}
+
+fn record_suite_fetch<T>(
+    result: Result<T, FetchFailure>,
+    acquisition: &AcquisitionLedger,
+    suite: Suite,
+    stage: AcquisitionStage,
+) -> Result<T, AppError> {
+    match result {
+        Ok(value) => Ok(value),
+        Err(failure) => {
+            acquisition.suite_failed(
+                suite,
+                stage,
+                &failure.endpoint,
+                failure.consumed_bytes,
+                &failure.error,
+            )?;
+            Err(failure.error)
+        }
+    }
 }
 
 pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, AppError> {
@@ -201,11 +283,39 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     let provider_raw = execution_suite_dir.join("raw");
     let suite_dir = execution_suite_dir;
     let summary_path = suite_dir.join("summary.json");
+    let raw_index_path = provider_raw.join("index.json");
+    let expected_summary_digest = if raw_index_path.exists() {
+        Some(validate_raw_index(
+            &provider_raw,
+            request.run_id,
+            request.attempt,
+            request.suite.job_name(),
+        )?)
+    } else if summary_path.exists() {
+        return Err(AppError::Integrity(format!(
+            "stored summary has no raw evidence index: {}",
+            summary_path.display()
+        )));
+    } else {
+        None
+    };
     if summary_path.exists()
         && (!request.include_binaries || suite_dir.join("binary-inventory.json").exists())
     {
         let bytes =
             fs::read(&summary_path).map_err(|source| AppError::storage(&summary_path, source))?;
+        validate_json_schema(
+            "suite-summary-v2",
+            include_str!("../schema/suite-summary-v2.schema.json"),
+            &bytes,
+        )?;
+        let actual_summary_digest = hex::encode(Sha256::digest(&bytes));
+        if expected_summary_digest.as_deref() != Some(actual_summary_digest.as_str()) {
+            return Err(AppError::Integrity(format!(
+                "stored summary digest disagrees with the raw evidence index: {}",
+                summary_path.display()
+            )));
+        }
         let summary: SuiteSummary =
             serde_json::from_slice(&bytes).map_err(|source| AppError::Json {
                 endpoint: summary_path.display().to_string(),
@@ -214,11 +324,27 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         if summary.run_id != request.run_id
             || summary.attempt != request.attempt
             || summary.suite != request.suite.job_name()
+            || summary
+                .shards
+                .iter()
+                .any(|shard| !shard.build.sha.eq_ignore_ascii_case(request.commit))
         {
             return Err(AppError::Integrity(format!(
                 "stored immutable summary does not match {} run {} attempt {}",
                 request.suite, request.run_id, request.attempt
             )));
+        }
+        if request.include_binaries {
+            validate_binary_inventory(&suite_dir)?;
+        }
+        let shard_names = summary
+            .shards
+            .iter()
+            .map(|shard| shard.index.clone())
+            .collect::<Vec<_>>();
+        request.acquisition.register(request.suite, &shard_names)?;
+        for shard in &shard_names {
+            request.acquisition.retained(request.suite, shard)?;
         }
         return Ok(summary);
     }
@@ -246,19 +372,22 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             .run_context
             .lock()
             .map_err(|_| AppError::Remote("shared Actions run context lock poisoned".to_owned()))?;
-        if let Some(context) = cached.as_ref() {
+        let context = if let Some(context) = cached.as_ref() {
             context.clone()
         } else {
-            let context = Arc::new(load_run_context(
+            let context = load_run_context(
                 request.run_id,
                 request.attempt,
                 layout.remote_name,
                 request.artifact_base,
                 &provider_raw,
-            )?);
+            )
+            .map(Arc::new)
+            .map_err(Arc::new);
             *cached = Some(context.clone());
             context
-        }
+        };
+        context.map_err(AppError::Shared)?
     };
     let resolution = resolve_artifact_base(&run_context, layout.remote_name, &provider_raw)?;
     let artifact_base = resolution.base;
@@ -271,53 +400,70 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         .join(&format!("runs/{}/{}/", request.run_id, layout.remote_name))
         .map_err(|error| AppError::Remote(format!("construct evidence URL: {error}")))?;
 
-    let split_meta = classify_pipeline_fetch(
-        fetch_text(
-            &client,
-            run_root.join("plan/split.meta").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await,
-        &resolution.jobs,
-        &provider_raw,
-        "plan metadata",
-        false,
+    let split_meta = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("plan/split.meta").unwrap(),
+                MAX_INDEX_BYTES,
+                &provider_raw.join("plan/split.meta"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "plan metadata",
+            false,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::PlanMetadata,
     )?;
     let plan = parse_split_meta(&split_meta)?;
-    write_string_immutable(&provider_raw.join("plan/split.meta"), &split_meta)?;
-    let planned_index = classify_pipeline_fetch(
-        fetch_text(
-            &client,
-            run_root.join("plan/shards/").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await,
-        &resolution.jobs,
-        &provider_raw,
-        "planned-shard index",
-        false,
-    )?;
-    write_string_immutable(
-        &provider_raw.join("indexes/planned-shards.html"),
-        &planned_index,
+    let planned_index = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("plan/shards/").unwrap(),
+                MAX_INDEX_BYTES,
+                &provider_raw.join("indexes/planned-shards.html"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "planned-shard index",
+            false,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::PlannedShardIndex,
     )?;
     let planned_shards = directory_entries(&planned_index, false)?
         .into_iter()
         .filter_map(|name| name.strip_suffix(".list").map(ToOwned::to_owned))
         .collect::<Vec<_>>();
-    let plan_table_text = classify_pipeline_fetch(
-        fetch_text(
-            &client,
-            run_root.join("plan/plan.tsv").unwrap(),
-            MAX_TEXT_BYTES,
-        )
-        .await,
-        &resolution.jobs,
-        &provider_raw,
-        "plan table",
-        false,
+    let suite = request.suite;
+    request.acquisition.register(suite, &planned_shards)?;
+    let plan_table_text = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("plan/plan.tsv").unwrap(),
+                MAX_TEXT_BYTES,
+                &provider_raw.join("plan/plan.tsv"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "plan table",
+            false,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::PlanTable,
     )?;
-    write_string_immutable(&provider_raw.join("plan/plan.tsv"), &plan_table_text)?;
     let plan_table = parse_plan_table(&plan_table_text)?;
     if plan_table.values().sum::<u64>() != plan.total {
         return Err(AppError::Integrity(
@@ -325,41 +471,64 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         ));
     }
 
-    let failed_list = classify_pipeline_fetch(
-        fetch_text(
-            &client,
-            run_root.join("collect/failed.list").unwrap(),
-            MAX_TEXT_BYTES,
-        )
-        .await,
-        &resolution.jobs,
-        &provider_raw,
-        "collector failure inventory",
-        true,
+    let failed_list = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("collect/failed.list").unwrap(),
+                MAX_TEXT_BYTES,
+                &provider_raw.join("collect/failed.list"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "collector failure inventory",
+            true,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::FailureInventory,
     )?;
-    let verdict = classify_pipeline_fetch(
-        fetch_text(
-            &client,
-            run_root.join("collect/verdict").unwrap(),
-            MAX_INDEX_BYTES,
-        )
-        .await,
-        &resolution.jobs,
-        &provider_raw,
-        "collector verdict",
-        true,
+    let verdict = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("collect/verdict").unwrap(),
+                MAX_INDEX_BYTES,
+                &provider_raw.join("collect/verdict"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "collector verdict",
+            true,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::Verdict,
     )?;
-    write_string_immutable(&provider_raw.join("collect/failed.list"), &failed_list)?;
-    write_string_immutable(&provider_raw.join("collect/verdict"), &verdict)?;
 
-    let shard_index = classify_pipeline_fetch(
-        fetch_text(&client, run_root.join("shard/").unwrap(), MAX_INDEX_BYTES).await,
-        &resolution.jobs,
-        &provider_raw,
-        "published-shard index",
-        true,
+    let shard_index = record_suite_fetch(
+        classify_pipeline_fetch(
+            fetch_text(
+                &client,
+                request.fetch_permits,
+                run_root.join("shard/").unwrap(),
+                MAX_INDEX_BYTES,
+                &provider_raw.join("indexes/shards.html"),
+            )
+            .await,
+            &resolution.jobs,
+            &provider_raw,
+            "published-shard index",
+            true,
+        ),
+        request.acquisition,
+        request.suite,
+        AcquisitionStage::PublishedShardIndex,
     )?;
-    write_string_immutable(&provider_raw.join("indexes/shards.html"), &shard_index)?;
     let shard_names = directory_entries(&shard_index, true)?;
     if shard_names.is_empty() {
         return job_level_failure(
@@ -386,105 +555,197 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         ));
     }
 
-    let suite = request.suite;
-    let shard_fetches = shard_names.into_iter().map(|shard| {
+    let make_fetch = |shard: String| {
         let shard_root = run_root.join(&format!("shard/{shard}/")).unwrap();
         let client = &client;
+        let fetch_permits = request.fetch_permits;
         let jobs = &resolution.jobs;
         let provider_raw = &provider_raw;
         async move {
-            let build_text = classify_pipeline_fetch(
-                fetch_text(
-                    client,
-                    shard_root.join("build.read").unwrap(),
-                    MAX_INDEX_BYTES,
-                )
-                .await,
-                jobs,
-                provider_raw,
-                &format!("shard {shard} build provenance"),
-                false,
-            )?;
-            let testcase_text = classify_pipeline_fetch(
-                fetch_text(client, shard_root.join("tc.read").unwrap(), MAX_INDEX_BYTES).await,
-                jobs,
-                provider_raw,
-                &format!("shard {shard} testcase provenance"),
-                false,
-            )?;
-            let workflow_result = classify_pipeline_fetch(
-                fetch_text(
-                    client,
-                    shard_root.join(layout.result_file).unwrap(),
-                    MAX_TEXT_BYTES,
-                )
-                .await,
-                jobs,
-                provider_raw,
-                &format!("shard {shard} workflow result"),
-                true,
-            )?;
-            let shard_done = classify_pipeline_fetch(
-                fetch_text(
-                    client,
-                    shard_root.join("shard.done").unwrap(),
-                    MAX_INDEX_BYTES,
-                )
-                .await,
-                jobs,
-                provider_raw,
-                &format!("shard {shard} completion record"),
-                true,
-            )?;
-            let results_index = classify_pipeline_fetch(
-                fetch_text(
-                    client,
-                    shard_root.join("test-results/").unwrap(),
-                    MAX_INDEX_BYTES,
-                )
-                .await,
-                jobs,
-                provider_raw,
-                &format!("shard {shard} test-result index"),
-                true,
-            )?;
-            let junit_names = directory_entries(&results_index, false)?
+            let shard_name = shard.clone();
+            let result = async {
+                at_fetch_stage(
+                    AcquisitionStage::BuildProvenance,
+                    classify_pipeline_fetch(
+                        fetch_text(
+                            client,
+                            fetch_permits,
+                            shard_root.join("build.read").unwrap(),
+                            MAX_INDEX_BYTES,
+                            &provider_raw.join(format!("shards/{shard}/build.read")),
+                        )
+                        .await,
+                        jobs,
+                        provider_raw,
+                        &format!("shard {shard} build provenance"),
+                        false,
+                    ),
+                )?;
+                at_fetch_stage(
+                    AcquisitionStage::TestcaseProvenance,
+                    classify_pipeline_fetch(
+                        fetch_text(
+                            client,
+                            fetch_permits,
+                            shard_root.join("tc.read").unwrap(),
+                            MAX_INDEX_BYTES,
+                            &provider_raw.join(format!("shards/{shard}/tc.read")),
+                        )
+                        .await,
+                        jobs,
+                        provider_raw,
+                        &format!("shard {shard} testcase provenance"),
+                        false,
+                    ),
+                )?;
+                at_fetch_stage(
+                    AcquisitionStage::WorkflowResult,
+                    classify_pipeline_fetch(
+                        fetch_text(
+                            client,
+                            fetch_permits,
+                            shard_root.join(layout.result_file).unwrap(),
+                            MAX_TEXT_BYTES,
+                            &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
+                        )
+                        .await,
+                        jobs,
+                        provider_raw,
+                        &format!("shard {shard} workflow result"),
+                        true,
+                    ),
+                )?;
+                at_fetch_stage(
+                    AcquisitionStage::ShardCompletion,
+                    classify_pipeline_fetch(
+                        fetch_text(
+                            client,
+                            fetch_permits,
+                            shard_root.join("shard.done").unwrap(),
+                            MAX_INDEX_BYTES,
+                            &provider_raw.join(format!("shards/{shard}/shard.done")),
+                        )
+                        .await,
+                        jobs,
+                        provider_raw,
+                        &format!("shard {shard} completion record"),
+                        true,
+                    ),
+                )?;
+                let results_index = at_fetch_stage(
+                    AcquisitionStage::TestResultIndex,
+                    classify_pipeline_fetch(
+                        fetch_text(
+                            client,
+                            fetch_permits,
+                            shard_root.join("test-results/").unwrap(),
+                            MAX_INDEX_BYTES,
+                            &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
+                        )
+                        .await,
+                        jobs,
+                        provider_raw,
+                        &format!("shard {shard} test-result index"),
+                        true,
+                    ),
+                )?;
+                let junit_names = at_stage(
+                    AcquisitionStage::TestResultIndex,
+                    directory_entries(&results_index, false),
+                )?
                 .into_iter()
                 .filter(|name| name.ends_with(".xml"))
                 .collect::<Vec<_>>();
-            if junit_names.is_empty() {
-                return job_level_failure(
-                    format!("shard {shard} has no {suite} JUnit XML"),
-                    jobs,
-                    provider_raw,
-                );
-            }
-            let junit = stream::iter(junit_names.into_iter().map(|file| {
-                let url = shard_root.join(&format!("test-results/{file}")).unwrap();
-                async move {
-                    let xml = fetch_text(client, url, MAX_JUNIT_BYTES).await?;
-                    Ok::<_, AppError>((file, xml))
+                if junit_names.is_empty() {
+                    return at_stage(
+                        AcquisitionStage::Junit,
+                        job_level_failure(
+                            format!("shard {shard} has no {suite} JUnit XML"),
+                            jobs,
+                            provider_raw,
+                        ),
+                    );
                 }
-            }))
-            .buffered(4)
-            .try_collect()
-            .await?;
-            Ok::<_, AppError>(FetchedShard {
-                name: shard,
-                root: shard_root,
-                build_text,
-                testcase_text,
-                workflow_result,
-                shard_done,
-                results_index,
-                junit,
-            })
+                let junit_files = stream::iter(junit_names.into_iter().map(|file| {
+                    let url = shard_root.join(&format!("test-results/{file}")).unwrap();
+                    let destination = provider_raw.join(format!("shards/{shard}/{file}"));
+                    async move {
+                        at_fetch_stage(
+                            AcquisitionStage::Junit,
+                            fetch_text(client, fetch_permits, url, MAX_JUNIT_BYTES, &destination)
+                                .await,
+                        )?;
+                        Ok::<_, ShardFetchError>(file)
+                    }
+                }))
+                .buffered(4)
+                .try_collect()
+                .await?;
+                Ok::<_, ShardFetchError>(FetchedShard {
+                    name: shard,
+                    root: shard_root,
+                    junit_files,
+                })
+            }
+            .await;
+            (shard_name, result)
         }
-    });
-    let fetched_shards = stream::iter(shard_fetches)
-        .buffered(10)
-        .try_collect::<Vec<_>>()
-        .await?;
+    };
+    let mut remaining = shard_names.into_iter();
+    let mut in_flight = futures_util::stream::FuturesUnordered::new();
+    for _ in 0..request.fetch_concurrency {
+        if !request.acquisition.schedule_if_running(|| {
+            let Some(shard) = remaining.next() else {
+                return false;
+            };
+            in_flight.push(make_fetch(shard));
+            true
+        })? {
+            break;
+        }
+    }
+    let mut fetched_shards = Vec::new();
+    let mut fetch_errors = Vec::new();
+    while let Some((shard, result)) = in_flight.next().await {
+        match result {
+            Ok(fetched) => {
+                request.acquisition.retained(suite, &shard)?;
+                fetched_shards.push(fetched);
+            }
+            Err(error) => {
+                request.acquisition.failed(
+                    suite,
+                    &shard,
+                    error.stage,
+                    error.endpoint.as_deref(),
+                    error.consumed_bytes,
+                    &error.error,
+                )?;
+                fetch_errors.push((shard, error));
+            }
+        }
+        request.acquisition.schedule_if_running(|| {
+            let Some(shard) = remaining.next() else {
+                return false;
+            };
+            in_flight.push(make_fetch(shard));
+            true
+        })?;
+    }
+    if !fetch_errors.is_empty() {
+        fetch_errors.sort_by(|left, right| {
+            left.0
+                .cmp(&right.0)
+                .then_with(|| left.1.stage.order().cmp(&right.1.stage.order()))
+        });
+        return Err(fetch_errors.remove(0).1.error);
+    }
+    if remaining.len() > 0 {
+        return Err(AppError::Unavailable(
+            "shard acquisition stopped after another mandatory shard failed".to_owned(),
+        ));
+    }
+    fetched_shards.sort_by(|left, right| left.name.cmp(&right.name));
 
     let failed_inventory = parse_failed_list(&failed_list)?;
     let failed_inventory_count = failed_inventory.len() as u64;
@@ -514,20 +775,15 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         let FetchedShard {
             name: shard,
             root: shard_root,
-            build_text,
-            testcase_text,
-            workflow_result,
-            shard_done,
-            results_index,
-            junit,
+            junit_files,
         } = fetched;
-        write_string_immutable(
+        let build_text = read_bounded_text(
             &provider_raw.join(format!("shards/{shard}/build.read")),
-            &build_text,
+            MAX_INDEX_BYTES,
         )?;
-        write_string_immutable(
+        let testcase_text = read_bounded_text(
             &provider_raw.join(format!("shards/{shard}/tc.read")),
-            &testcase_text,
+            MAX_INDEX_BYTES,
         )?;
         let build = parse_build_provenance(&build_text)?;
         if !build.sha.eq_ignore_ascii_case(request.commit) {
@@ -569,13 +825,13 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             )));
         }
 
-        write_string_immutable(
+        let workflow_result = read_bounded_text(
             &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
-            &workflow_result,
+            MAX_TEXT_BYTES,
         )?;
-        write_string_immutable(
+        let shard_done = read_bounded_text(
             &provider_raw.join(format!("shards/{shard}/shard.done")),
-            &shard_done,
+            MAX_INDEX_BYTES,
         )?;
         let assigned = match validate_shard_done(&shard_done, &shard, layout.remote_name) {
             Ok(assigned) => assigned,
@@ -617,25 +873,29 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 &shard_root,
                 &suite_dir,
                 &shard,
-                request.max_binary_bytes,
-                request.binary_bytes_remaining,
-                &mut binary_records,
+                BinaryCollection {
+                    per_file_limit: request.max_binary_bytes,
+                    total_remaining: request.binary_bytes_remaining,
+                    fetch_permits: request.fetch_permits,
+                    suite: request.suite.job_name(),
+                    consumption: request.binary_consumption,
+                    records: &mut binary_records,
+                },
             )
             .await?;
         }
 
-        write_string_immutable(
+        let _results_index = read_bounded_text(
             &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
-            &results_index,
+            MAX_INDEX_BYTES,
         )?;
-        let junit_files = junit
-            .iter()
-            .map(|(file, _)| file.clone())
-            .collect::<Vec<_>>();
 
         let mut junit_shard_counts = WorkflowCounts::default();
-        for (file, xml) in junit {
-            write_string_immutable(&provider_raw.join(format!("shards/{shard}/{file}")), &xml)?;
+        for file in &junit_files {
+            let xml = read_bounded_text(
+                &provider_raw.join(format!("shards/{shard}/{file}")),
+                MAX_JUNIT_BYTES,
+            )?;
             for case in parse_junit(&xml)? {
                 counts.tests += 1;
                 if case.failure.is_some() {
@@ -804,13 +1064,6 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         )));
     }
 
-    write_raw_index(
-        &provider_raw,
-        request.run_id,
-        request.attempt,
-        request.suite.job_name(),
-    )?;
-
     let summary = SuiteSummary {
         schema_version: 2,
         suite: request.suite.job_name().to_owned(),
@@ -824,6 +1077,14 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         shards,
         failures,
     };
+    let summary_bytes = serde_json::to_vec_pretty(&summary)?;
+    write_raw_index(
+        &provider_raw,
+        request.run_id,
+        request.attempt,
+        request.suite.job_name(),
+        &hex::encode(Sha256::digest(&summary_bytes)),
+    )?;
     if request.include_binaries {
         write_json_immutable(
             &suite_dir.join("binary-inventory.json"),
@@ -842,38 +1103,58 @@ async fn collect_abnormal_shard_binaries(
     shard_root: &Url,
     suite_dir: &Path,
     shard: &str,
-    per_file_limit: u64,
-    total_remaining: &mut u64,
-    records: &mut Vec<BinaryRecord>,
+    options: BinaryCollection<'_>,
 ) -> Result<(), AppError> {
+    let BinaryCollection {
+        per_file_limit,
+        total_remaining,
+        fetch_permits,
+        suite,
+        consumption,
+        records,
+    } = options;
     let artifacts_root = shard_root.join("artifacts/").map_err(|error| {
         AppError::Malformed(format!("construct abnormal-shard artifact URL: {error}"))
     })?;
-    let index = match fetch_text(client, artifacts_root.clone(), MAX_INDEX_BYTES).await {
+    let index = match fetch_text(
+        client,
+        fetch_permits,
+        artifacts_root.clone(),
+        MAX_INDEX_BYTES,
+        &suite_dir.join(format!("raw/indexes/shard-{shard}-artifacts.html")),
+    )
+    .await
+    {
         Ok(index) => index,
         Err(error) => {
             records.push(BinaryRecord {
                 shard: shard.to_owned(),
                 name: "*".to_owned(),
                 state: "excluded".to_owned(),
-                reason: Some(error.diagnostic_kind().to_owned()),
+                reason: Some(error.error.diagnostic_kind().to_owned()),
                 size_bytes: None,
                 sha256: None,
             });
             return Ok(());
         }
     };
-    write_string_immutable(
-        &suite_dir.join(format!("raw/indexes/shard-{shard}-artifacts.html")),
-        &index,
-    )?;
     for name in directory_entries(&index, false)? {
         let url = artifacts_root
             .join(&name)
             .map_err(|error| AppError::Malformed(format!("construct artifact URL: {error}")))?;
+        let _permit = fetch_permits
+            .acquire()
+            .await
+            .map_err(|_| AppError::Remote("fetch concurrency limiter closed".to_owned()))?;
         let response = match client.get(url.clone()).send().await {
             Ok(response) if response.status().is_success() => response,
             Ok(response) => {
+                consumption.push(BinaryConsumption {
+                    suite: suite.to_owned(),
+                    shard: shard.to_owned(),
+                    name: name.clone(),
+                    consumed_bytes: 0,
+                });
                 records.push(BinaryRecord {
                     shard: shard.to_owned(),
                     name,
@@ -885,6 +1166,12 @@ async fn collect_abnormal_shard_binaries(
                 continue;
             }
             Err(_) => {
+                consumption.push(BinaryConsumption {
+                    suite: suite.to_owned(),
+                    shard: shard.to_owned(),
+                    name: name.clone(),
+                    consumed_bytes: 0,
+                });
                 records.push(BinaryRecord {
                     shard: shard.to_owned(),
                     name,
@@ -897,9 +1184,15 @@ async fn collect_abnormal_shard_binaries(
             }
         };
         let declared = response.content_length();
+        let total_is_limiting = *total_remaining <= per_file_limit;
         let allowed = per_file_limit.min(*total_remaining);
         if declared.is_some_and(|size| size > allowed) || allowed == 0 {
-            let total_is_limiting = *total_remaining <= per_file_limit;
+            consumption.push(BinaryConsumption {
+                suite: suite.to_owned(),
+                shard: shard.to_owned(),
+                name: name.clone(),
+                consumed_bytes: 0,
+            });
             records.push(BinaryRecord {
                 shard: shard.to_owned(),
                 name,
@@ -919,33 +1212,62 @@ async fn collect_abnormal_shard_binaries(
         fs::create_dir_all(parent).map_err(|source| AppError::storage(parent, source))?;
         let mut temporary = tempfile::NamedTempFile::new_in(parent)
             .map_err(|source| AppError::storage(parent, source))?;
-        let mut stream = response.bytes_stream();
+        let stream = response.bytes_stream().map_err(std::io::Error::other);
+        let mut reader = StreamReader::new(stream).take(allowed);
         let mut size = 0_u64;
         let mut hasher = Sha256::new();
         let mut excluded = None;
-        while let Some(chunk) = stream.next().await {
-            let chunk = chunk.map_err(|error| AppError::Remote(format!("read {url}: {error}")))?;
-            size = size.saturating_add(chunk.len() as u64);
-            if size > allowed {
-                excluded = Some(if size > per_file_limit {
-                    "per_file_limit"
-                } else {
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let consumed = match reader.read(&mut buffer).await {
+                Ok(consumed) => consumed,
+                Err(error) => {
+                    consumption.push(BinaryConsumption {
+                        suite: suite.to_owned(),
+                        shard: shard.to_owned(),
+                        name: name.clone(),
+                        consumed_bytes: size,
+                    });
+                    return Err(AppError::Remote(format!("read {url}: {error}")));
+                }
+            };
+            if consumed == 0 {
+                break;
+            }
+            size += consumed as u64;
+            *total_remaining -= consumed as u64;
+            if let Err(source) = temporary.write_all(&buffer[..consumed]) {
+                consumption.push(BinaryConsumption {
+                    suite: suite.to_owned(),
+                    shard: shard.to_owned(),
+                    name: name.clone(),
+                    consumed_bytes: size,
+                });
+                return Err(AppError::storage(temporary.path(), source));
+            }
+            hasher.update(&buffer[..consumed]);
+            if declared.is_none() && size == allowed {
+                excluded = Some(if total_is_limiting {
                     "total_limit"
+                } else {
+                    "per_file_limit"
                 });
                 break;
             }
-            temporary
-                .write_all(&chunk)
-                .map_err(|source| AppError::storage(temporary.path(), source))?;
-            hasher.update(&chunk);
         }
+        consumption.push(BinaryConsumption {
+            suite: suite.to_owned(),
+            shard: shard.to_owned(),
+            name: name.clone(),
+            consumed_bytes: size,
+        });
         if let Some(reason) = excluded {
             records.push(BinaryRecord {
                 shard: shard.to_owned(),
                 name,
                 state: "excluded".to_owned(),
                 reason: Some(reason.to_owned()),
-                size_bytes: Some(size),
+                size_bytes: declared,
                 sha256: None,
             });
             continue;
@@ -968,7 +1290,6 @@ async fn collect_abnormal_shard_binaries(
             }
             Err(error) => return Err(AppError::storage(&destination, error.error)),
         }
-        *total_remaining -= size;
         records.push(BinaryRecord {
             shard: shard.to_owned(),
             name,
@@ -979,6 +1300,15 @@ async fn collect_abnormal_shard_binaries(
         });
     }
     Ok(())
+}
+
+struct BinaryCollection<'a> {
+    per_file_limit: u64,
+    total_remaining: &'a mut u64,
+    fetch_permits: &'a Semaphore,
+    suite: &'a str,
+    consumption: &'a mut Vec<BinaryConsumption>,
+    records: &'a mut Vec<BinaryRecord>,
 }
 
 struct EvidenceResolution {
@@ -992,6 +1322,8 @@ pub(crate) struct RunContext {
     job_pages: Vec<(String, Vec<u8>)>,
     collect_log: Option<Vec<u8>>,
 }
+
+pub(crate) type RunContextCache = Mutex<Option<Result<Arc<RunContext>, Arc<AppError>>>>;
 
 struct LoadedJobs {
     jobs: Vec<ActionJob>,
@@ -1167,19 +1499,22 @@ fn load_jobs(run_id: u64) -> Result<LoadedJobs, AppError> {
 }
 
 fn classify_pipeline_fetch(
-    result: Result<String, AppError>,
+    result: Result<String, FetchFailure>,
     jobs: &[ActionJob],
     provider_raw: &Path,
     stage: &str,
     terminal_required: bool,
-) -> Result<String, AppError> {
+) -> Result<String, FetchFailure> {
     match result {
         Ok(value) => Ok(value),
-        Err(error)
+        Err(mut failure)
             if jobs.iter().any(job_is_abnormal)
-                || (terminal_required && matches!(&error, AppError::Unavailable(_))) =>
+                || (terminal_required && matches!(&failure.error, AppError::Unavailable(_))) =>
         {
-            retain_abnormal_job_logs(jobs, provider_raw)?;
+            if let Err(error) = retain_abnormal_job_logs(jobs, provider_raw) {
+                failure.error = error;
+                return Err(failure);
+            }
             let failed = jobs
                 .iter()
                 .filter(|job| job_is_abnormal(job))
@@ -1197,11 +1532,13 @@ fn classify_pipeline_fetch(
             } else {
                 format!("abnormal Actions jobs: {failed}")
             };
-            Err(AppError::JobLevel(format!(
-                "{stage} is unavailable after {context}; {error}"
-            )))
+            failure.error = AppError::JobLevel(format!(
+                "{stage} is unavailable after {context}; {}",
+                failure.error
+            ));
+            Err(failure)
         }
-        Err(error) => Err(error),
+        Err(failure) => Err(failure),
     }
 }
 
@@ -1352,45 +1689,242 @@ fn bounded_gh_output(args: &[&str], endpoint: &str, limit: usize) -> Result<Vec<
     Ok(bytes)
 }
 
-async fn fetch_text(client: &Client, url: Url, limit: usize) -> Result<String, AppError> {
-    let response = client
-        .get(url.clone())
-        .send()
-        .await
-        .map_err(|error| AppError::Remote(format!("GET {url}: {error}")))?;
+async fn fetch_text(
+    client: &Client,
+    fetch_permits: &Semaphore,
+    url: Url,
+    limit: usize,
+    destination: &Path,
+) -> Result<String, FetchFailure> {
+    if destination.exists() {
+        return read_verified_text(destination, limit)
+            .map_err(|error| FetchFailure::new(&url, 0, error));
+    }
+    let _permit = fetch_permits.acquire().await.map_err(|_| {
+        FetchFailure::new(
+            &url,
+            0,
+            AppError::Remote("fetch concurrency limiter closed".to_owned()),
+        )
+    })?;
+    let response = client.get(url.clone()).send().await.map_err(|error| {
+        FetchFailure::new(&url, 0, AppError::Remote(format!("GET {url}: {error}")))
+    })?;
     if !response.status().is_success() {
         if response.status() == reqwest::StatusCode::NOT_FOUND {
-            return Err(AppError::Unavailable(format!("GET {url} returned 404")));
+            return Err(FetchFailure::new(
+                &url,
+                0,
+                AppError::Unavailable(format!("GET {url} returned 404")),
+            ));
         }
         if response.status() == reqwest::StatusCode::GONE {
-            return Err(AppError::Expired(format!("GET {url} returned 410")));
+            return Err(FetchFailure::new(
+                &url,
+                0,
+                AppError::Expired(format!("GET {url} returned 410")),
+            ));
         }
-        return Err(AppError::Remote(format!(
-            "GET {url} returned {}",
-            response.status()
-        )));
+        return Err(FetchFailure::new(
+            &url,
+            0,
+            AppError::Remote(format!("GET {url} returned {}", response.status())),
+        ));
     }
     if response
         .content_length()
         .is_some_and(|length| length > limit as u64)
     {
-        return Err(AppError::Oversized(format!(
-            "GET {url} exceeds the {limit}-byte text limit"
-        )));
+        return Err(FetchFailure::new(
+            &url,
+            0,
+            AppError::Oversized(format!("GET {url} exceeds the {limit}-byte text limit")),
+        ));
     }
-    let mut bytes = Vec::new();
+    let parent = destination.parent().ok_or_else(|| {
+        FetchFailure::new(
+            &url,
+            0,
+            AppError::Input(format!(
+                "output path has no parent: {}",
+                destination.display()
+            )),
+        )
+    })?;
+    fs::create_dir_all(parent)
+        .map_err(|source| FetchFailure::new(&url, 0, AppError::storage(parent, source)))?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)
+        .map_err(|source| FetchFailure::new(&url, 0, AppError::storage(parent, source)))?;
+    let mut size = 0_usize;
     let mut stream = response.bytes_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk = chunk.map_err(|error| AppError::Remote(format!("read {url}: {error}")))?;
-        if bytes.len().saturating_add(chunk.len()) > limit {
-            return Err(AppError::Oversized(format!(
-                "GET {url} exceeds the {limit}-byte text limit"
-            )));
+        let chunk = chunk.map_err(|error| {
+            FetchFailure::new(
+                &url,
+                size as u64,
+                AppError::Remote(format!("read {url}: {error}")),
+            )
+        })?;
+        let consumed = size.saturating_add(chunk.len());
+        if size.saturating_add(chunk.len()) > limit {
+            return Err(FetchFailure::new(
+                &url,
+                consumed as u64,
+                AppError::Oversized(format!("GET {url} exceeds the {limit}-byte text limit")),
+            ));
         }
-        bytes.extend_from_slice(&chunk);
+        temporary.write_all(&chunk).map_err(|source| {
+            FetchFailure::new(
+                &url,
+                consumed as u64,
+                AppError::storage(temporary.path(), source),
+            )
+        })?;
+        size = consumed;
     }
-    String::from_utf8(bytes)
-        .map_err(|_| AppError::Malformed(format!("GET {url} is not UTF-8 text")))
+    temporary.as_file().sync_all().map_err(|source| {
+        FetchFailure::new(
+            &url,
+            size as u64,
+            AppError::storage(temporary.path(), source),
+        )
+    })?;
+    let bytes = fs::read(temporary.path()).map_err(|source| {
+        FetchFailure::new(
+            &url,
+            size as u64,
+            AppError::storage(temporary.path(), source),
+        )
+    })?;
+    let text = String::from_utf8(bytes).map_err(|_| {
+        FetchFailure::new(
+            &url,
+            size as u64,
+            AppError::Malformed(format!("GET {url} is not UTF-8 text")),
+        )
+    })?;
+    write_text_receipt(destination, text.as_bytes())
+        .map_err(|error| FetchFailure::new(&url, size as u64, error))?;
+    match temporary.persist_noclobber(destination) {
+        Ok(_) => {
+            sync_directory(parent).map_err(|error| FetchFailure::new(&url, size as u64, error))?
+        }
+        Err(error) if error.error.kind() == std::io::ErrorKind::AlreadyExists => {
+            let existing = read_bounded_text(destination, limit)
+                .map_err(|error| FetchFailure::new(&url, size as u64, error))?;
+            if existing != text {
+                return Err(FetchFailure::new(
+                    &url,
+                    size as u64,
+                    AppError::Integrity(format!(
+                        "immutable evidence already exists with different content: {}",
+                        destination.display()
+                    )),
+                ));
+            }
+        }
+        Err(error) => {
+            return Err(FetchFailure::new(
+                &url,
+                size as u64,
+                AppError::storage(destination, error.error),
+            ));
+        }
+    }
+    Ok(text)
+}
+
+fn read_bounded_text(path: &Path, limit: usize) -> Result<String, AppError> {
+    let bytes = fs::read(path).map_err(|source| AppError::storage(path, source))?;
+    if bytes.len() > limit {
+        return Err(AppError::Integrity(format!(
+            "retained evidence exceeds its {limit}-byte limit: {}",
+            path.display()
+        )));
+    }
+    String::from_utf8(bytes).map_err(|_| {
+        AppError::Integrity(format!(
+            "retained evidence is not UTF-8 text: {}",
+            path.display()
+        ))
+    })
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextEvidenceReceipt {
+    schema_version: u32,
+    file_name: String,
+    size_bytes: u64,
+    sha256: String,
+}
+
+fn text_receipt_path(destination: &Path) -> Result<PathBuf, AppError> {
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            AppError::Input(format!(
+                "raw evidence path has no UTF-8 file name: {}",
+                destination.display()
+            ))
+        })?;
+    let receipt_name = format!("{}.json", hex::encode(Sha256::digest(file_name.as_bytes())));
+    Ok(destination
+        .parent()
+        .expect("raw evidence destination has a parent")
+        .join(".cubrid-ci-receipts")
+        .join(receipt_name))
+}
+
+fn write_text_receipt(destination: &Path, bytes: &[u8]) -> Result<(), AppError> {
+    let file_name = destination
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| {
+            AppError::Input(format!(
+                "raw evidence path has no UTF-8 file name: {}",
+                destination.display()
+            ))
+        })?;
+    write_json_immutable(
+        &text_receipt_path(destination)?,
+        &TextEvidenceReceipt {
+            schema_version: 1,
+            file_name: file_name.to_owned(),
+            size_bytes: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(bytes)),
+        },
+    )
+}
+
+fn read_verified_text(path: &Path, limit: usize) -> Result<String, AppError> {
+    let text = read_bounded_text(path, limit)?;
+    let receipt_path = text_receipt_path(path)?;
+    let receipt_bytes = fs::read(&receipt_path).map_err(|error| {
+        AppError::Integrity(format!(
+            "read retained raw evidence receipt {}: {error}",
+            receipt_path.display()
+        ))
+    })?;
+    let receipt: TextEvidenceReceipt = serde_json::from_slice(&receipt_bytes).map_err(|error| {
+        AppError::Integrity(format!(
+            "parse retained raw evidence receipt {}: {error}",
+            receipt_path.display()
+        ))
+    })?;
+    let file_name = path.file_name().and_then(|name| name.to_str());
+    if receipt.schema_version != 1
+        || Some(receipt.file_name.as_str()) != file_name
+        || receipt.size_bytes != text.len() as u64
+        || receipt.sha256 != hex::encode(Sha256::digest(text.as_bytes()))
+    {
+        return Err(AppError::Integrity(format!(
+            "retained raw evidence disagrees with its receipt: {}",
+            path.display()
+        )));
+    }
+    Ok(text)
 }
 
 fn directory_entries(html: &str, directories: bool) -> Result<Vec<String>, AppError> {
@@ -1690,23 +2224,30 @@ fn validate_shard_done(
         .map_err(|_| AppError::Malformed("shard.done has invalid assigned".to_owned()))
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RawEvidenceIndex {
     schema_version: u32,
     run_id: u64,
     attempt: u64,
     suite: String,
+    summary_sha256: String,
     files: Vec<RawFileRecord>,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Serialize, Deserialize)]
 struct RawFileRecord {
     path: PathBuf,
     size_bytes: u64,
     sha256: String,
 }
 
-fn write_raw_index(raw_dir: &Path, run_id: u64, attempt: u64, suite: &str) -> Result<(), AppError> {
+fn write_raw_index(
+    raw_dir: &Path,
+    run_id: u64,
+    attempt: u64,
+    suite: &str,
+    summary_sha256: &str,
+) -> Result<(), AppError> {
     let mut files = Vec::new();
     for entry in WalkDir::new(raw_dir) {
         let entry = entry.map_err(|error| {
@@ -1739,9 +2280,144 @@ fn write_raw_index(raw_dir: &Path, run_id: u64, attempt: u64, suite: &str) -> Re
             run_id,
             attempt,
             suite: suite.to_owned(),
+            summary_sha256: summary_sha256.to_owned(),
             files,
         },
     )
+}
+
+fn validate_raw_index(
+    raw_dir: &Path,
+    run_id: u64,
+    attempt: u64,
+    suite: &str,
+) -> Result<String, AppError> {
+    let index_path = raw_dir.join("index.json");
+    let bytes = fs::read(&index_path).map_err(|error| {
+        AppError::Integrity(format!("read retained raw evidence index: {error}"))
+    })?;
+    validate_json_schema(
+        "raw-evidence-index-v2",
+        include_str!("../schema/raw-evidence-index-v2.schema.json"),
+        &bytes,
+    )?;
+    let index: RawEvidenceIndex = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::Integrity(format!("parse retained raw evidence index: {error}"))
+    })?;
+    if index.schema_version != 2
+        || index.run_id != run_id
+        || index.attempt != attempt
+        || index.suite != suite
+    {
+        return Err(AppError::Integrity(
+            "retained raw evidence index has inconsistent identity".to_owned(),
+        ));
+    }
+    let mut seen = BTreeSet::new();
+    for file in index.files {
+        if file.path.is_absolute()
+            || file
+                .path
+                .components()
+                .any(|component| !matches!(component, std::path::Component::Normal(_)))
+            || !seen.insert(file.path.clone())
+        {
+            return Err(AppError::Integrity(format!(
+                "retained raw evidence index has an unsafe or repeated path: {}",
+                file.path.display()
+            )));
+        }
+        let path = raw_dir.join(&file.path);
+        let retained = fs::read(&path).map_err(|error| {
+            AppError::Integrity(format!(
+                "read retained raw evidence {}: {error}",
+                file.path.display()
+            ))
+        })?;
+        if retained.len() as u64 != file.size_bytes
+            || hex::encode(Sha256::digest(&retained)) != file.sha256
+        {
+            return Err(AppError::Integrity(format!(
+                "retained raw evidence disagrees with its index: {}",
+                file.path.display()
+            )));
+        }
+    }
+    Ok(index.summary_sha256)
+}
+
+fn validate_binary_inventory(suite_dir: &Path) -> Result<(), AppError> {
+    let path = suite_dir.join("binary-inventory.json");
+    let bytes = fs::read(&path).map_err(|source| AppError::storage(&path, source))?;
+    validate_json_schema(
+        "binary-inventory-v2",
+        include_str!("../schema/binary-inventory-v2.schema.json"),
+        &bytes,
+    )?;
+    let inventory: BinaryInventory = serde_json::from_slice(&bytes).map_err(|error| {
+        AppError::Integrity(format!("parse retained binary inventory: {error}"))
+    })?;
+    let mut seen = BTreeSet::new();
+    for file in inventory.files {
+        let safe_name = Path::new(&file.name)
+            .components()
+            .all(|component| matches!(component, std::path::Component::Normal(_)))
+            && Path::new(&file.name).components().count() == 1;
+        if !safe_name || !seen.insert((file.shard.clone(), file.name.clone())) {
+            return Err(AppError::Integrity(format!(
+                "retained binary inventory has an unsafe or repeated path: {}/{}",
+                file.shard, file.name
+            )));
+        }
+        let destination = suite_dir
+            .join("binaries")
+            .join(&file.shard)
+            .join(&file.name);
+        if file.state == "downloaded" {
+            let (Some(size), Some(digest)) = (file.size_bytes, file.sha256.as_deref()) else {
+                return Err(AppError::Integrity(format!(
+                    "downloaded binary lacks size or digest: {}/{}",
+                    file.shard, file.name
+                )));
+            };
+            if file.reason.is_some() {
+                return Err(AppError::Integrity(format!(
+                    "downloaded binary has an exclusion reason: {}/{}",
+                    file.shard, file.name
+                )));
+            }
+            let (actual_size, actual_digest) = file_size_and_sha256(&destination)?;
+            if actual_size != size || actual_digest != digest {
+                return Err(AppError::Integrity(format!(
+                    "retained binary disagrees with its inventory: {}/{}",
+                    file.shard, file.name
+                )));
+            }
+        } else if file.sha256.is_some() {
+            return Err(AppError::Integrity(format!(
+                "excluded binary unexpectedly has a digest: {}/{}",
+                file.shard, file.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_json_schema(label: &str, schema: &str, bytes: &[u8]) -> Result<(), AppError> {
+    let schema: serde_json::Value = serde_json::from_str(schema)
+        .map_err(|error| AppError::Integrity(format!("parse embedded {label} schema: {error}")))?;
+    let instance: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {
+        AppError::Integrity(format!("parse retained {label} document: {error}"))
+    })?;
+    let validator = jsonschema::validator_for(&schema).map_err(|error| {
+        AppError::Integrity(format!("compile embedded {label} schema: {error}"))
+    })?;
+    if let Err(error) = validator.validate(&instance) {
+        return Err(AppError::Integrity(format!(
+            "retained document violates {label} schema: {error}"
+        )));
+    }
+    Ok(())
 }
 
 fn parse_junit(xml: &str) -> Result<Vec<JunitCase>, AppError> {

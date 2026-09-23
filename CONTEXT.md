@@ -15,6 +15,18 @@ _Avoid_: PR status
 The normalized metadata and textual test evidence collected for one exact CUBRID commit at one observation time. An unavailable or inaccessible optional artifact is recorded as a limitation rather than silently omitted.
 _Avoid_: CI result, latest result
 
+**Collection observation**:
+One local invocation's append-only record of acquiring and validating requested suite evidence, including its outcome, shard acquisition states, and invocation-scoped resource accounting. Multiple collection observations may refer to the same immutable provider run and attempt without rewriting its raw evidence.
+_Avoid_: Collection attempt, collector run
+
+**Interrupted collection observation**:
+A collection observation whose request was retained but whose terminal result was not published because the local collector stopped. It does not imply that the suite or its provider execution failed.
+_Avoid_: Failed suite, job-level failure
+
+**Shard acquisition state**:
+The local evidence-availability outcome for one requested shard: retained, failed, or not attempted. It is distinct from the shard's CI or testcase result.
+_Avoid_: Shard result
+
 **Selected commit**:
 The exact CUBRID commit for which an evidence snapshot is requested. It is the local checkout commit for an implicit worktree request and an explicitly supplied commit for an explicit pull-request request.
 _Avoid_: Current commit
@@ -66,6 +78,18 @@ _Avoid_: Root cause
 **Raw evidence**:
 The bounded original textual records from which normalized failure evidence is derived, retained so an extraction can be audited or repeated after the evidence server expires.
 _Avoid_: Artifact dump
+
+**Authorized evidence source**:
+A configured company CI service from which the collector is permitted to obtain records. Source authorization does not prove that a particular record set belongs to the selected commit or forms complete evidence.
+_Avoid_: Trusted evidence
+
+**Unvalidated raw evidence**:
+Raw evidence obtained from an authorized evidence source before complete suite identity and integrity validation. It may support diagnosis but must never be presented as validated suite evidence.
+_Avoid_: Untrusted evidence, partial evidence
+
+**Binary transfer budget**:
+The collection-wide limit on optional binary response-body bytes consumed during one invocation, including bytes read from artifacts that are ultimately excluded.
+_Avoid_: Retained-byte budget, binary size limit
 
 **Job-level failure**:
 A terminal CI failure that produced no trustworthy testcase verdict, such as a failed build, plan, collector, or shard. It is evidence about pipeline execution rather than a fabricated failed testcase.

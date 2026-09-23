@@ -1,7 +1,8 @@
 use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
+use std::time::Duration;
 
 use serde_json::{Value, json};
 
@@ -33,6 +34,97 @@ fn current_directory_collection_selects_head_and_publishes_partial_manifest() {
 
     let manifest = fixture.manifest();
     assert_eq!(manifest, result);
+}
+
+#[test]
+fn terminal_collection_publishes_an_append_only_observation() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let command_result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let observations = fixture
+        .manifest_path(SHA)
+        .parent()
+        .unwrap()
+        .join("observations");
+    let entries = fs::read_dir(observations)
+        .unwrap()
+        .collect::<Result<Vec<_>, _>>()
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    let request: Value =
+        serde_json::from_slice(&fs::read(entries[0].path().join("request.json")).unwrap()).unwrap();
+    let result: Value =
+        serde_json::from_slice(&fs::read(entries[0].path().join("result.json")).unwrap()).unwrap();
+    validate_schema_file("collection-observation-request-v1.schema.json", &request);
+    validate_schema_file("collection-observation-result-v1.schema.json", &result);
+    assert_eq!(request["schema_version"], 1);
+    assert_eq!(request["observation_id"], result["observation_id"]);
+    assert_eq!(request["repository"], "CUBRID/cubrid");
+    assert_eq!(request["pr"]["number"], 7990);
+    assert_eq!(request["commit"], SHA);
+    assert_eq!(
+        request["requested_suites"],
+        json!(["test_medium", "test_sql", "test_shell"])
+    );
+    assert_eq!(request["fetch_concurrency"]["value"], 40);
+    assert_eq!(request["fetch_concurrency"]["source"], "default");
+    assert_eq!(request["binary_budget"]["include"], false);
+    assert_eq!(request["binary_budget"]["per_file_bytes"], 268_435_456_u64);
+    assert_eq!(request["binary_budget"]["total_bytes"], 536_870_912_u64);
+    assert_eq!(result["schema_version"], 1);
+    assert_eq!(result["outcome"], "incomplete");
+    assert_eq!(result["command"], command_result);
+}
+
+#[test]
+fn interrupted_collection_leaves_a_request_without_a_terminal_result() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        r#"parent=$PPID
+while kill -0 "$parent" 2>/dev/null
+do
+  sleep 0.01
+done
+exit 1"#,
+    );
+    let observation_root = fixture
+        .manifest_path(SHA)
+        .parent()
+        .unwrap()
+        .join("observations");
+    let mut child = fixture
+        .command(&[])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+
+    let observation = (0..200).find_map(|_| {
+        let request = fs::read_dir(&observation_root).ok().and_then(|entries| {
+            entries
+                .filter_map(Result::ok)
+                .map(|entry| entry.path())
+                .find(|path| path.join("request.json").is_file())
+        });
+        if request.is_none() {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        request
+    });
+    let observation = observation.expect("collector did not publish its request");
+    child.kill().unwrap();
+    let _ = child.wait_with_output().unwrap();
+
+    let request: Value =
+        serde_json::from_slice(&fs::read(observation.join("request.json")).unwrap()).unwrap();
+    validate_schema_file("collection-observation-request-v1.schema.json", &request);
+    assert!(!observation.join("result.json").exists());
+    assert!(!fixture.manifest_path(SHA).exists());
 }
 
 #[test]
@@ -118,6 +210,45 @@ fn repeatable_suite_filters_publish_only_requested_suites() {
 }
 
 #[test]
+fn suite_filters_are_deduplicated_into_canonical_acquisition_order() {
+    let fixture = Fixture::new(status_snapshot(SHA, true));
+
+    let output = fixture
+        .command(&[
+            "--suite",
+            "test_shell",
+            "--suite",
+            "test_medium",
+            "--suite",
+            "test_shell",
+            "--suite",
+            "test_sql",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let observation = fs::read_dir(
+        fixture
+            .manifest_path(SHA)
+            .parent()
+            .unwrap()
+            .join("observations"),
+    )
+    .unwrap()
+    .next()
+    .unwrap()
+    .unwrap()
+    .path();
+    let request: Value =
+        serde_json::from_slice(&fs::read(observation.join("request.json")).unwrap()).unwrap();
+    assert_eq!(
+        request["requested_suites"],
+        json!(["test_medium", "test_sql", "test_shell"])
+    );
+}
+
+#[test]
 fn wrong_sha_suite_status_publishes_integrity_failure() {
     let mut snapshot = status_snapshot(SHA, true);
     snapshot["checks"][0]["current"]["reported_for_sha"] = json!(OTHER_SHA);
@@ -194,6 +325,78 @@ esac"#,
         .filter(|call| *call == "api repos/CUBRID/cubrid/actions/runs/123")
         .count();
     assert_eq!(actions_run_calls, 1);
+}
+
+#[test]
+fn suites_from_one_actions_run_share_the_execution_lookup_failure() {
+    let mut snapshot = status_snapshot(SHA, true);
+    for suite in ["test_sql", "test_shell"] {
+        let mut check = snapshot["checks"][0].clone();
+        check["name"] = json!(format!("gha-ci: {suite}"));
+        snapshot["checks"].as_array_mut().unwrap().push(check);
+    }
+    let fixture = Fixture::new(snapshot);
+    let calls = fixture.commands.path().join("gh-calls");
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123*) exit 1 ;;
+  *) exit 64 ;;
+esac"#,
+            calls.display()
+        ),
+    );
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let actions_run_calls = fs::read_to_string(calls)
+        .unwrap()
+        .lines()
+        .filter(|call| *call == "api repos/CUBRID/cubrid/actions/runs/123")
+        .count();
+    assert_eq!(actions_run_calls, 1);
+}
+
+#[test]
+fn suites_from_one_actions_run_share_the_context_lookup_failure() {
+    let mut snapshot = status_snapshot(SHA, true);
+    snapshot["checks"][0]["current"]["state"] = json!("FAILURE");
+    for suite in ["test_sql", "test_shell"] {
+        let mut check = snapshot["checks"][0].clone();
+        check["name"] = json!(format!("gha-ci: {suite}"));
+        snapshot["checks"].as_array_mut().unwrap().push(check);
+    }
+    let fixture = Fixture::new(snapshot);
+    let calls = fixture.commands.path().join("gh-calls");
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123/jobs*) exit 1 ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *) exit 64 ;;
+esac"#,
+            calls.display()
+        ),
+    );
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(5));
+    let context_calls = fs::read_to_string(calls)
+        .unwrap()
+        .lines()
+        .filter(|call| call.contains("actions/runs/123/jobs"))
+        .count();
+    assert_eq!(context_calls, 1);
 }
 
 #[test]
@@ -278,6 +481,36 @@ esac"#
     );
     let result: Value = serde_json::from_slice(&fs::read(stdout).unwrap()).unwrap();
     assert_eq!(result["suites"]["test_medium"]["state"], "running");
+}
+
+#[test]
+fn interactive_error_clears_progress_before_terminal_message() {
+    let fixture = Fixture::new(status_snapshot(OTHER_SHA, false));
+    let command = format!(
+        "env -u CUBRID_CI_DATA_DIR -u CUBRID_CI_ARTIFACT_BASE PATH={} CUBRID_CI_CONFIG={} {} collect --data-dir {}",
+        fixture.commands.path().display(),
+        missing_config_path().display(),
+        env!("CARGO_BIN_EXE_cubrid-ci"),
+        fixture.data.path().display(),
+    );
+    let command = format!("/bin/sh -c '{command}'");
+
+    let output = Command::new("script")
+        .current_dir(fixture.worktree.path())
+        .args(["-qefc", &command, "/dev/null"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let terminal = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        terminal.contains("Collecting ["),
+        "terminal output: {terminal:?}"
+    );
+    assert!(
+        terminal.contains("\r\x1b[2Kerror: result identity mismatch:"),
+        "progress was not cleared before the terminal error: {terminal:?}"
+    );
 }
 
 #[test]
@@ -404,4 +637,15 @@ fn write_command(directory: &Path, name: &str, behavior: &str) {
     let mut permissions = fs::metadata(&path).unwrap().permissions();
     permissions.set_mode(0o755);
     fs::set_permissions(path, permissions).unwrap();
+}
+
+fn validate_schema_file(name: &str, instance: &Value) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("schema")
+        .join(name);
+    let schema: Value = serde_json::from_slice(&fs::read(path).unwrap()).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    if let Err(error) = validator.validate(instance) {
+        panic!("schema validation failed: {error}");
+    }
 }

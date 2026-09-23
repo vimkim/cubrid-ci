@@ -44,16 +44,20 @@ impl TerminalProgress {
         }
     }
 
-    fn clear(&self) {
+    pub fn clear(&self) {
         if !self.enabled {
+            return;
+        }
+        let Ok(mut active) = self.active.lock() else {
+            return;
+        };
+        if !*active {
             return;
         }
         let mut stderr = io::stderr().lock();
         let _ = write!(stderr, "\r\x1b[2K");
         let _ = stderr.flush();
-        if let Ok(mut active) = self.active.lock() {
-            *active = false;
-        }
+        *active = false;
     }
 }
 

@@ -12,6 +12,8 @@ pub struct DoctorResult {
     pub data_dir_source: &'static str,
     pub artifact_base: Option<String>,
     pub artifact_base_source: Option<&'static str>,
+    pub fetch_concurrency: usize,
+    pub fetch_concurrency_source: &'static str,
     pub checks: Vec<DoctorCheck>,
 }
 
@@ -55,6 +57,8 @@ impl DoctorResult {
             data_dir_source: config.data_dir_source.as_str(),
             artifact_base: config.artifact_base.as_ref().map(ToString::to_string),
             artifact_base_source: config.artifact_base_source.map(|source| source.as_str()),
+            fetch_concurrency: config.fetch_concurrency,
+            fetch_concurrency_source: config.fetch_concurrency_source.as_str(),
             checks,
         }
     }
@@ -67,6 +71,10 @@ impl DoctorResult {
         lines.push(format!(
             "evidence root: {} ({})",
             self.data_dir, self.data_dir_source
+        ));
+        lines.push(format!(
+            "fetch concurrency: {} ({})",
+            self.fetch_concurrency, self.fetch_concurrency_source
         ));
         for check in &self.checks {
             lines.push(format!(

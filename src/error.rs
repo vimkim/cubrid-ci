@@ -1,4 +1,5 @@
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use thiserror::Error;
 
@@ -35,6 +36,9 @@ impl ExitKind {
 
 #[derive(Debug, Error)]
 pub enum AppError {
+    #[error(transparent)]
+    Shared(Arc<AppError>),
+
     #[error("invalid input: {0}")]
     Input(String),
 
@@ -78,8 +82,9 @@ pub enum AppError {
 }
 
 impl AppError {
-    pub const fn kind(&self) -> ExitKind {
+    pub fn kind(&self) -> ExitKind {
         match self {
+            Self::Shared(error) => error.kind(),
             Self::Input(_) => ExitKind::Input,
             Self::Unavailable(_) | Self::Expired(_) | Self::JobLevel(_) => ExitKind::Unavailable,
             Self::Integrity(_) | Self::Malformed(_) => ExitKind::Integrity,
@@ -88,8 +93,9 @@ impl AppError {
         }
     }
 
-    pub const fn diagnostic_kind(&self) -> &'static str {
+    pub fn diagnostic_kind(&self) -> &'static str {
         match self {
+            Self::Shared(error) => error.diagnostic_kind(),
             Self::Input(_) => "input",
             Self::Unavailable(_) => "unavailable",
             Self::Expired(_) => "expired",
@@ -103,8 +109,16 @@ impl AppError {
         }
     }
 
-    pub const fn exit_code(&self) -> u8 {
+    pub fn exit_code(&self) -> u8 {
         self.kind().code()
+    }
+
+    pub fn is_job_level(&self) -> bool {
+        match self {
+            Self::Shared(error) => error.is_job_level(),
+            Self::JobLevel(_) => true,
+            _ => false,
+        }
     }
 
     pub fn storage(path: impl Into<PathBuf>, source: std::io::Error) -> Self {

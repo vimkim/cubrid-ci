@@ -126,6 +126,82 @@ fn command_line_configuration_overrides_environment_and_file() {
 }
 
 #[test]
+fn doctor_reports_command_line_fetch_concurrency_overrides() {
+    let commands = tempfile::tempdir().unwrap();
+    write_command(commands.path(), "cubrid-pr-status", "exit 0");
+    write_command(commands.path(), "gh", "exit 0");
+    let evidence_root = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.toml");
+    fs::write(&config_path, "fetch_concurrency = 20\n").unwrap();
+
+    let output = doctor(commands.path(), evidence_root.path())
+        .env("CUBRID_CI_CONFIG", &config_path)
+        .env("CUBRID_CI_FETCH_CONCURRENCY", "40")
+        .args(["--fetch-concurrency", "80"])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["fetch_concurrency"], 80);
+    assert_eq!(result["fetch_concurrency_source"], "command_line");
+}
+
+#[test]
+fn doctor_reports_fetch_concurrency_from_environment_file_and_default() {
+    let commands = tempfile::tempdir().unwrap();
+    write_command(commands.path(), "cubrid-pr-status", "exit 0");
+    write_command(commands.path(), "gh", "exit 0");
+    let evidence_root = tempfile::tempdir().unwrap();
+    let config_dir = tempfile::tempdir().unwrap();
+    let config_path = config_dir.path().join("config.toml");
+    fs::write(&config_path, "fetch_concurrency = 20\n").unwrap();
+
+    let environment = doctor(commands.path(), evidence_root.path())
+        .env("CUBRID_CI_CONFIG", &config_path)
+        .env("CUBRID_CI_FETCH_CONCURRENCY", "40")
+        .output()
+        .unwrap();
+    assert!(environment.status.success());
+    let environment: Value = serde_json::from_slice(&environment.stdout).unwrap();
+    assert_eq!(environment["fetch_concurrency"], 40);
+    assert_eq!(environment["fetch_concurrency_source"], "environment");
+
+    let file = doctor(commands.path(), evidence_root.path())
+        .env("CUBRID_CI_CONFIG", &config_path)
+        .output()
+        .unwrap();
+    assert!(file.status.success());
+    let file: Value = serde_json::from_slice(&file.stdout).unwrap();
+    assert_eq!(file["fetch_concurrency"], 20);
+    assert_eq!(file["fetch_concurrency_source"], "config_file");
+
+    let default = doctor(commands.path(), evidence_root.path())
+        .output()
+        .unwrap();
+    assert!(default.status.success());
+    let default: Value = serde_json::from_slice(&default.stdout).unwrap();
+    assert_eq!(default["fetch_concurrency"], 40);
+    assert_eq!(default["fetch_concurrency_source"], "default");
+}
+
+#[test]
+fn zero_fetch_concurrency_is_rejected_without_stdout() {
+    let commands = tempfile::tempdir().unwrap();
+    let evidence_root = tempfile::tempdir().unwrap();
+
+    let output = doctor(commands.path(), evidence_root.path())
+        .args(["--fetch-concurrency", "0"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("fetch-concurrency"));
+}
+
+#[test]
 fn environment_configuration_overrides_file_without_command_line_value() {
     let commands = tempfile::tempdir().unwrap();
     write_command(commands.path(), "cubrid-pr-status", "exit 0");
@@ -278,6 +354,7 @@ fn doctor_without_data_dir(path: &Path) -> Command {
         .env("PATH", path)
         .env_remove("CUBRID_CI_DATA_DIR")
         .env_remove("CUBRID_CI_ARTIFACT_BASE")
+        .env_remove("CUBRID_CI_FETCH_CONCURRENCY")
         .env("CUBRID_CI_CONFIG", missing_config_path())
         .args(["doctor", "--json"]);
     command

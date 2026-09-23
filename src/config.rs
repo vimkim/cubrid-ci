@@ -12,6 +12,7 @@ use crate::error::AppError;
 pub struct ConfigOverride {
     pub data_dir: Option<PathBuf>,
     pub artifact_base: Option<String>,
+    pub fetch_concurrency: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -20,6 +21,8 @@ pub struct ResolvedConfig {
     pub data_dir_source: ConfigSource,
     pub artifact_base: Option<Url>,
     pub artifact_base_source: Option<ConfigSource>,
+    pub fetch_concurrency: usize,
+    pub fetch_concurrency_source: ConfigSource,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -45,13 +48,17 @@ impl ConfigSource {
 struct FileConfig {
     data_dir: Option<PathBuf>,
     artifact_base: Option<String>,
+    fetch_concurrency: Option<usize>,
 }
+
+const DEFAULT_FETCH_CONCURRENCY: usize = 40;
 
 impl ResolvedConfig {
     pub fn load(overrides: ConfigOverride) -> Result<Self, AppError> {
         let file = load_file_config()?;
         let environment_data_dir = nonempty_env("CUBRID_CI_DATA_DIR").map(PathBuf::from);
         let environment_artifact_base = nonempty_env("CUBRID_CI_ARTIFACT_BASE");
+        let environment_fetch_concurrency = nonempty_env("CUBRID_CI_FETCH_CONCURRENCY");
 
         let (data_dir, data_dir_source) = if let Some(path) = overrides.data_dir {
             (path, ConfigSource::CommandLine)
@@ -82,12 +89,51 @@ impl ResolvedConfig {
             (None, None)
         };
 
+        let (fetch_concurrency, fetch_concurrency_source) =
+            if let Some(value) = overrides.fetch_concurrency {
+                (
+                    validate_fetch_concurrency(value).map_err(AppError::Input)?,
+                    ConfigSource::CommandLine,
+                )
+            } else if let Some(value) = environment_fetch_concurrency {
+                (
+                    parse_fetch_concurrency(&value.to_string_lossy()).map_err(|error| {
+                        AppError::Input(format!("CUBRID_CI_FETCH_CONCURRENCY {error}"))
+                    })?,
+                    ConfigSource::Environment,
+                )
+            } else if let Some(value) = file.fetch_concurrency {
+                (
+                    validate_fetch_concurrency(value).map_err(AppError::Input)?,
+                    ConfigSource::ConfigFile,
+                )
+            } else {
+                (DEFAULT_FETCH_CONCURRENCY, ConfigSource::Default)
+            };
+
         Ok(Self {
             data_dir,
             data_dir_source,
             artifact_base,
             artifact_base_source,
+            fetch_concurrency,
+            fetch_concurrency_source,
         })
+    }
+}
+
+pub(crate) fn parse_fetch_concurrency(value: &str) -> Result<usize, String> {
+    let parsed = value
+        .parse::<usize>()
+        .map_err(|_| "must be a positive integer".to_owned())?;
+    validate_fetch_concurrency(parsed)
+}
+
+fn validate_fetch_concurrency(value: usize) -> Result<usize, String> {
+    if value == 0 {
+        Err("fetch concurrency must be greater than zero".to_owned())
+    } else {
+        Ok(value)
     }
 }
 

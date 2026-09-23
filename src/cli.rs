@@ -3,6 +3,7 @@ use std::time::Duration;
 
 use clap::{ArgAction, Args, Parser, Subcommand};
 
+use crate::config::parse_fetch_concurrency;
 use crate::model::Suite;
 
 #[derive(Debug, Parser)]
@@ -58,6 +59,10 @@ pub struct CollectArgs {
     #[arg(long)]
     pub artifact_base: Option<String>,
 
+    /// Maximum number of concurrent evidence-server response downloads.
+    #[arg(long, value_parser = parse_fetch_concurrency)]
+    pub fetch_concurrency: Option<usize>,
+
     /// Poll the selected commit until every requested suite is terminal.
     #[arg(long)]
     pub wait: bool,
@@ -92,6 +97,10 @@ pub struct DoctorArgs {
     /// Internal CI evidence-server base URL.
     #[arg(long)]
     pub artifact_base: Option<String>,
+
+    /// Maximum number of concurrent evidence-server response downloads.
+    #[arg(long, value_parser = parse_fetch_concurrency)]
+    pub fetch_concurrency: Option<usize>,
 }
 
 #[derive(Debug, Clone, Args)]

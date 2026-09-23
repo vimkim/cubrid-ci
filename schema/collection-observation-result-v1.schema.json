@@ -1,0 +1,129 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/collection-observation-result-v1.schema.json",
+  "title": "cubrid-ci collection observation result v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "observation_id",
+    "finished_at",
+    "outcome",
+    "binary_budget",
+    "acquisition"
+  ],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "observation_id": { "type": "string", "minLength": 1 },
+    "finished_at": { "type": "string", "format": "date-time" },
+    "outcome": { "enum": ["complete", "incomplete", "failed"] },
+    "command": { "$ref": "#/$defs/command" },
+    "error": { "$ref": "#/$defs/error" },
+    "binary_budget": {
+      "type": "object",
+      "required": ["configured_bytes", "consumed_bytes", "remaining_bytes", "artifacts"],
+      "properties": {
+        "configured_bytes": { "type": "integer", "minimum": 0 },
+        "consumed_bytes": { "type": "integer", "minimum": 0 },
+        "remaining_bytes": { "type": "integer", "minimum": 0 },
+        "artifacts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["suite", "shard", "name", "consumed_bytes"],
+            "properties": {
+              "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+              "shard": { "type": "string", "pattern": "^[0-9]+$" },
+              "name": { "type": "string", "minLength": 1 },
+              "consumed_bytes": { "type": "integer", "minimum": 0 }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "acquisition": {
+      "type": "object",
+      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell"] },
+      "additionalProperties": {
+        "type": "object",
+        "required": ["shards"],
+        "properties": {
+          "shards": {
+            "type": "object",
+            "propertyNames": { "pattern": "^[0-9]+$" },
+            "additionalProperties": { "$ref": "#/$defs/shardAcquisition" }
+          },
+          "errors": {
+            "type": "array",
+            "items": { "$ref": "#/$defs/acquisitionFailure" }
+          }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "allOf": [
+    {
+      "if": { "properties": { "outcome": { "const": "failed" } }, "required": ["outcome"] },
+      "then": { "required": ["error"], "not": { "required": ["command"] } },
+      "else": { "required": ["command"], "not": { "required": ["error"] } }
+    }
+  ],
+  "$defs": {
+    "error": {
+      "type": "object",
+      "required": ["kind", "diagnostic", "message"],
+      "properties": {
+        "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
+        "diagnostic": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "command": {
+      "type": "object",
+      "required": ["schema_version", "ok", "repository", "pr", "commit", "collected_at", "output_dir", "suites", "errors"],
+      "properties": {
+        "schema_version": { "const": 2 },
+        "ok": { "type": "boolean" },
+        "repository": { "const": "CUBRID/cubrid" },
+        "pr": { "type": "object" },
+        "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+        "collected_at": { "type": "string", "format": "date-time" },
+        "output_dir": { "type": "string" },
+        "suites": { "type": "object", "minProperties": 1 },
+        "errors": { "type": "array" }
+      },
+      "additionalProperties": false
+    },
+    "shardAcquisition": {
+      "type": "object",
+      "required": ["state"],
+      "properties": {
+        "state": { "enum": ["retained", "failed", "not_attempted"] },
+        "stage": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string", "format": "uri" },
+        "consumed_bytes": { "type": "integer", "minimum": 0 },
+        "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
+        "diagnostic": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    },
+    "acquisitionFailure": {
+      "type": "object",
+      "required": ["stage", "endpoint", "consumed_bytes", "kind", "diagnostic", "message"],
+      "properties": {
+        "stage": { "type": "string", "minLength": 1 },
+        "endpoint": { "type": "string", "format": "uri" },
+        "consumed_bytes": { "type": "integer", "minimum": 0 },
+        "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
+        "diagnostic": { "type": "string", "minLength": 1 },
+        "message": { "type": "string", "minLength": 1 }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

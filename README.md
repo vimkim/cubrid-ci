@@ -32,6 +32,9 @@ cubrid-ci collect 7990 --commit <40-character-sha>
 cubrid-ci collect 7990 --commit <sha> \
   --suite test_sql --suite test_medium --wait --timeout 26h
 
+# Override the measured collection-wide HTTP concurrency ceiling.
+cubrid-ci collect 7990 --commit <sha> --fetch-concurrency 40
+
 # Opt in to bounded artifacts from abnormal shards.
 cubrid-ci collect 7990 --commit <sha> --include-binaries \
   --max-binary-bytes 268435456 --max-binary-total-bytes 536870912
@@ -67,10 +70,28 @@ The default evidence root is `~/.local/share/cubrid-ci-data` (for this user,
 `CUBRID_CI_DATA_DIR`, or `~/.config/cubrid-ci/config.toml`, in that precedence
 order.
 
+Evidence-server fetch concurrency defaults to 40 and is shared by every suite,
+shard, text response, and optional binary response. Override it with
+`--fetch-concurrency`, `CUBRID_CI_FETCH_CONCURRENCY`, or `fetch_concurrency` in
+the TOML configuration, in that precedence order. `cubrid-ci doctor` reports
+the effective value and source. The default's benchmark is recorded in
+[`docs/benchmarks/collection-fetch-concurrency-2026-09-23.md`](docs/benchmarks/collection-fetch-concurrency-2026-09-23.md).
+
 GitHub Actions provider evidence is stored by PR, commit, run, attempt, and
 suite. Provider inputs are immutable; `manifest.json` atomically records the
-executions selected by the latest collection. Historical schema-v1 CircleCI
-bundles remain recognizable but are never rewritten.
+executions selected by the latest collection. Each validated raw index binds
+its suite summary digest, so a warm summary cannot be reused after either side
+changes. Historical schema-v1 CircleCI bundles remain recognizable but are
+never rewritten.
+
+Each invocation also creates an append-only
+`observations/<observation-id>/request.json` before acquisition and adds
+`result.json` on terminal completion. The observation records canonical suite
+and shard acquisition states, effective fetch configuration, diagnostics, and
+command-wide binary-budget consumption. Incomplete response reads retain their
+stage, endpoint, consumed byte count, and diagnostic without publishing the
+temporary body. A request without a result identifies an interrupted local
+collection; it does not label the provider execution or a suite as failed.
 
 ## Development and release
 
