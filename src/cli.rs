@@ -36,6 +36,10 @@ pub enum Commands {
     Collect(CollectArgs),
     /// Check dependencies and local collection configuration.
     Doctor(DoctorArgs),
+    /// Collect existing CI evidence for any exact Engine commit.
+    CollectCommit(CommitArgs),
+    /// Resolve a PR merge base and collect its existing CI evidence.
+    CollectBase(BaseArgs),
 }
 
 #[derive(Debug, Clone, Args)]
@@ -86,6 +90,66 @@ pub struct CollectArgs {
     /// Maximum artifact bytes downloaded across the collection.
     #[arg(long, default_value_t = 536_870_912)]
     pub max_binary_total_bytes: u64,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CommitArgs {
+    /// Exact 40-character Engine commit SHA.
+    pub sha: String,
+    #[command(flatten)]
+    pub options: CommitOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct BaseArgs {
+    /// CUBRID pull-request number or URL.
+    pub pr: String,
+    /// Dedicated bare Git cache (defaults beneath the evidence root).
+    #[arg(long)]
+    pub git_cache: Option<PathBuf>,
+    #[command(flatten)]
+    pub options: CommitOptions,
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct CommitOptions {
+    /// Suite to collect; repeat for a subset (all by default).
+    #[arg(long, value_enum)]
+    pub suite: Vec<Suite>,
+    /// Select a particular run instead of exact-commit status/check discovery.
+    #[arg(long, value_parser = clap::value_parser!(u64).range(1..))]
+    pub run_id: Option<u64>,
+    /// Select an attempt; older attempts require validated local evidence.
+    #[arg(long, requires = "run_id", value_parser = clap::value_parser!(u64).range(1..))]
+    pub attempt: Option<u64>,
+    /// Root directory for durable evidence.
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
+    /// Internal CI evidence-server base URL.
+    #[arg(long)]
+    pub artifact_base: Option<String>,
+    /// Maximum concurrent evidence-server response downloads.
+    #[arg(long, value_parser = parse_fetch_concurrency)]
+    pub fetch_concurrency: Option<usize>,
+}
+
+impl CommitOptions {
+    pub(crate) fn collection_args(&self) -> CollectArgs {
+        CollectArgs {
+            pr: None,
+            commit: None,
+            suite: self.suite.clone(),
+            data_dir: self.data_dir.clone(),
+            artifact_base: self.artifact_base.clone(),
+            fetch_concurrency: self.fetch_concurrency,
+            wait: false,
+            timeout: Duration::ZERO,
+            poll_interval: Duration::ZERO,
+            include_binaries: false,
+            max_binary_bytes: 268_435_456,
+            max_binary_total_bytes: 536_870_912,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Args)]
@@ -140,8 +204,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn exposes_only_the_three_public_commands() {
-        for command in ["status", "collect", "doctor"] {
+    fn exposes_public_commands() {
+        for command in [
+            "status",
+            "collect",
+            "doctor",
+            "collect-commit",
+            "collect-base",
+        ] {
             assert!(Cli::try_parse_from(["cubrid-ci", command, "--help"]).is_err());
         }
         for removed in ["test-medium", "test-sql", "test-shell"] {

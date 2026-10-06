@@ -913,3 +913,239 @@ fn validate_schema(schema: &str, instance: &[u8]) {
         panic!("schema validation failed: {error}");
     }
 }
+
+// Historical dispatch collection exercises the same suite parser and cached-build proof.
+#[tokio::test(flavor = "multi_thread")]
+async fn commit_dispatch_collects_red_suite_with_reused_build_and_no_pr_identity() {
+    let server = MockServer::start().await;
+    mount_shell(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commit_commands(commands.path(), &server, "completed", 3);
+    let data = tempfile::tempdir().unwrap();
+    let output = commit_command(commands.path(), data.path())
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    validate_schema(
+        include_str!("../schema/command-result-v3.schema.json"),
+        &output.stdout,
+    );
+    validate_schema(
+        include_str!("../schema/manifest-v3.schema.json"),
+        &output.stdout,
+    );
+    assert!(result.get("pr").is_none());
+    assert_eq!(result["commit"], SHA);
+    assert_eq!(
+        result["selection"]["runs"]["300"]["event"],
+        "workflow_dispatch"
+    );
+    assert_eq!(result["selection"]["runs"]["300"]["head_sha"], TC_SHA); // workflow revision differs
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let summary: Value = serde_json::from_slice(
+        &fs::read(root.join(result["suites"]["test_shell"]["summary"].as_str().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["shards"][0]["build"]["run_id"], 250);
+    assert_eq!(summary["counts"]["failures"], 1);
+    let observation = fs::read_dir(root.join("observations"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    validate_schema(
+        include_str!("../schema/collection-observation-request-v2.schema.json"),
+        &fs::read(observation.join("request.json")).unwrap(),
+    );
+    validate_schema(
+        include_str!("../schema/collection-observation-result-v2.schema.json"),
+        &fs::read(observation.join("result.json")).unwrap(),
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn explicit_run_derives_suite_verdict_and_rejects_wrong_engine() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commit_commands(commands.path(), &server, "completed", 3);
+    let data = tempfile::tempdir().unwrap();
+    // Aggregate run may be red; the medium suite is green.
+    let output = commit_suite_command(commands.path(), data.path(), "test_medium")
+        .args(["--run-id", "200"])
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(result["suites"]["test_medium"].get("status").is_none());
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let summary: Value = serde_json::from_slice(
+        &fs::read(root.join(result["suites"]["test_medium"]["summary"].as_str().unwrap())).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(summary["ci_state"], "success");
+    let wrong = "2222222222222222222222222222222222222222";
+    let script = fs::read_to_string(commands.path().join("gh"))
+        .unwrap()
+        .replace(
+            &format!("\"sha\":\"{SHA}\""),
+            &format!("\"sha\":\"{wrong}\""),
+        );
+    fs::write(commands.path().join("gh"), script).unwrap();
+    let output = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+        .env("PATH", commands.path())
+        .env("CUBRID_CI_CONFIG", missing_config_path())
+        .args([
+            "collect-commit",
+            wrong,
+            "--run-id",
+            "200",
+            "--suite",
+            "test_medium",
+            "--json",
+            "--data-dir",
+        ])
+        .arg(data.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        output.status.code(),
+        Some(4),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let wrong_result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(wrong_result["errors"][0]["kind"], "integrity");
+    assert!(
+        wrong_result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("build")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn newer_attempt_running_does_not_reuse_old_terminal_status() {
+    let server = MockServer::start().await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commit_commands(commands.path(), &server, "in_progress", 4);
+    let data = tempfile::tempdir().unwrap();
+    let output = commit_command(commands.path(), data.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_shell"]["state"], "running");
+    assert_eq!(result["suites"]["test_shell"]["execution"]["attempt"], 4);
+    assert!(server.received_requests().await.unwrap().is_empty());
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn old_attempt_requires_validated_cache_and_never_downloads_current_artifacts() {
+    let server = MockServer::start().await;
+    mount_shell(&server).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commit_commands(commands.path(), &server, "completed", 4);
+    let data = tempfile::tempdir().unwrap();
+    let args = ["--run-id", "300", "--attempt", "3"];
+    let output = commit_command(commands.path(), data.path())
+        .args(args)
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    assert!(server.received_requests().await.unwrap().is_empty());
+    // Populate an honestly collected immutable attempt-3 bundle, then advance metadata.
+    write_commit_commands(commands.path(), &server, "completed", 3);
+    assert!(
+        commit_command(commands.path(), data.path())
+            .output()
+            .unwrap()
+            .status
+            .success()
+    );
+    let requests = server.received_requests().await.unwrap().len();
+    write_commit_commands(commands.path(), &server, "completed", 4);
+    let output = commit_command(commands.path(), data.path())
+        .args(args)
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), requests);
+    // Tampered cache must not fall back to remote evidence.
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let summary = PathBuf::from(result["output_dir"].as_str().unwrap())
+        .join(result["suites"]["test_shell"]["summary"].as_str().unwrap());
+    fs::write(summary, b"{}").unwrap();
+    assert_eq!(
+        commit_command(commands.path(), data.path())
+            .args(args)
+            .output()
+            .unwrap()
+            .status
+            .code(),
+        Some(4)
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), requests);
+}
+
+fn commit_command(commands: &Path, data: &Path) -> Command {
+    commit_suite_command(commands, data, "test_shell")
+}
+
+fn commit_suite_command(commands: &Path, data: &Path, suite: &str) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"));
+    command
+        .env("PATH", commands)
+        .env("CUBRID_CI_CONFIG", missing_config_path())
+        .env_remove("CUBRID_CI_DATA_DIR")
+        .env_remove("CUBRID_CI_ARTIFACT_BASE")
+        .args([
+            "collect-commit",
+            SHA,
+            "--suite",
+            suite,
+            "--json",
+            "--data-dir",
+        ])
+        .arg(data);
+    command
+}
+
+fn write_commit_commands(commands: &Path, server: &MockServer, state: &str, attempt: u64) {
+    write_commands(commands, server);
+    let path = commands.join("gh");
+    let mut script = fs::read_to_string(&path).unwrap();
+    let statuses = json!([[{"context":"gha-ci: test_shell","state":"failure","target_url":"https://github.com/CUBRID/cubrid/actions/runs/300","created_at":"2026-10-06T00:00:00Z","id":1}]]);
+    script = script.replace(
+        "case \"$*\" in",
+        &format!(
+            r#"case "$*" in
+*commits/*/statuses*) printf '%s\n' '{statuses}' ;;
+*commits/*/check-runs*) printf '%s\n' '[{{"check_runs":[]}}]' ;;
+*commits/*) printf '%s\n' '{{"sha":"{SHA}"}}' ;;"#
+        ),
+    );
+    for (id, at) in [(200, 1), (300, attempt)] {
+        let old = format!(
+            "{{\"id\":{id},\"run_attempt\":{}}}",
+            if id == 300 { 3 } else { 1 }
+        );
+        let run = json!({"id":id,"run_attempt":at,"status":state,"conclusion":"failure","event":"workflow_dispatch","head_sha":TC_SHA,"path":".github/workflows/gha-ci.yml","repository":{"full_name":"CUBRID/cubrid"},"updated_at":"2026-10-06T00:00:00Z"});
+        script = script.replace(&old, &run.to_string());
+    }
+    fs::write(path, script).unwrap();
+}

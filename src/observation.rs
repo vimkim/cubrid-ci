@@ -17,6 +17,7 @@ static OBSERVATION_SEQUENCE: AtomicU64 = AtomicU64::new(0);
 
 pub(crate) struct CollectionObservation {
     id: String,
+    schema_version: u32,
     directory: PathBuf,
     max_binary_total_bytes: u64,
     acquisition: AcquisitionLedger,
@@ -25,7 +26,8 @@ pub(crate) struct CollectionObservation {
 pub(crate) struct ObservationParameters<'a> {
     pub output_dir: &'a Path,
     pub repository: &'a str,
-    pub pr: &'a PrIdentity,
+    pub pr: Option<&'a PrIdentity>,
+    pub selection: Option<&'a crate::commit_collect::CommitSelection>,
     pub commit: &'a str,
     pub requested_suites: &'a [Suite],
     pub fetch_concurrency: usize,
@@ -40,7 +42,10 @@ struct ObservationRequest<'a> {
     schema_version: u32,
     observation_id: &'a str,
     repository: &'a str,
-    pr: &'a PrIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pr: Option<&'a PrIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    selection: Option<&'a crate::commit_collect::CommitSelection>,
     commit: &'a str,
     started_at: DateTime<Utc>,
     requested_suites: &'a [Suite],
@@ -350,6 +355,7 @@ impl CollectionObservation {
                 Ok(()) => {
                     break Self {
                         id,
+                        schema_version: if parameters.selection.is_some() { 2 } else { 1 },
                         directory,
                         max_binary_total_bytes: parameters.max_binary_total_bytes,
                         acquisition: AcquisitionLedger::default(),
@@ -362,10 +368,11 @@ impl CollectionObservation {
         write_json_immutable(
             &observation.directory.join("request.json"),
             &ObservationRequest {
-                schema_version: 1,
+                schema_version: observation.schema_version,
                 observation_id: &observation.id,
                 repository: parameters.repository,
                 pr: parameters.pr,
+                selection: parameters.selection,
                 commit: parameters.commit,
                 started_at,
                 requested_suites: parameters.requested_suites,
@@ -392,7 +399,7 @@ impl CollectionObservation {
         write_json_immutable(
             &self.directory.join("result.json"),
             &ObservationResult {
-                schema_version: 1,
+                schema_version: self.schema_version,
                 observation_id: &self.id,
                 finished_at: Utc::now(),
                 outcome: if command.ok { "complete" } else { "incomplete" },
@@ -414,7 +421,7 @@ impl CollectionObservation {
         write_json_immutable(
             &self.directory.join("result.json"),
             &ObservationResult {
-                schema_version: 1,
+                schema_version: self.schema_version,
                 observation_id: &self.id,
                 finished_at: Utc::now(),
                 outcome: "failed",

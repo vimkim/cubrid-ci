@@ -1055,8 +1055,14 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     let verdict = verdict.trim();
     let status_success = request.ci_state.eq_ignore_ascii_case("success");
     let status_failure = request.ci_state.eq_ignore_ascii_case("failure");
+    // Explicit run selection has no attached suite status. The producer verdict
+    // and independently reconciled testcase records establish the outcome.
+    let unreported = request.ci_state.eq_ignore_ascii_case("unreported");
     let records_agree = (status_success && verdict == "pass" && junit_failure_count == 0)
-        || (status_failure && verdict == "fail" && junit_failure_count > 0);
+        || (status_failure && verdict == "fail" && junit_failure_count > 0)
+        || (unreported
+            && ((verdict == "pass" && junit_failure_count == 0)
+                || (verdict == "fail" && junit_failure_count > 0)));
     if !records_agree {
         return Err(AppError::Integrity(format!(
             "suite status {}, verdict {verdict}, and JUnit failure count {junit_failure_count} disagree",
@@ -1067,7 +1073,16 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     let summary = SuiteSummary {
         schema_version: 2,
         suite: request.suite.job_name().to_owned(),
-        ci_state: request.ci_state.to_ascii_lowercase(),
+        ci_state: if unreported {
+            if verdict == "pass" {
+                "success"
+            } else {
+                "failure"
+            }
+            .to_owned()
+        } else {
+            request.ci_state.to_ascii_lowercase()
+        },
         collection_state: "complete".to_owned(),
         run_id: request.run_id,
         attempt: request.attempt,

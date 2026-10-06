@@ -39,6 +39,13 @@ pub enum AppError {
     #[error(transparent)]
     Shared(Arc<AppError>),
 
+    #[error("{source}; pinned baseline request: {receipt}")]
+    Baseline {
+        receipt: PathBuf,
+        #[source]
+        source: Box<AppError>,
+    },
+
     #[error("invalid input: {0}")]
     Input(String),
 
@@ -85,6 +92,7 @@ impl AppError {
     pub fn kind(&self) -> ExitKind {
         match self {
             Self::Shared(error) => error.kind(),
+            Self::Baseline { source, .. } => source.kind(),
             Self::Input(_) => ExitKind::Input,
             Self::Unavailable(_) | Self::Expired(_) | Self::JobLevel(_) => ExitKind::Unavailable,
             Self::Integrity(_) | Self::Malformed(_) => ExitKind::Integrity,
@@ -96,6 +104,7 @@ impl AppError {
     pub fn diagnostic_kind(&self) -> &'static str {
         match self {
             Self::Shared(error) => error.diagnostic_kind(),
+            Self::Baseline { source, .. } => source.diagnostic_kind(),
             Self::Input(_) => "input",
             Self::Unavailable(_) => "unavailable",
             Self::Expired(_) => "expired",
@@ -116,6 +125,7 @@ impl AppError {
     pub fn is_job_level(&self) -> bool {
         match self {
             Self::Shared(error) => error.is_job_level(),
+            Self::Baseline { source, .. } => source.is_job_level(),
             Self::JobLevel(_) => true,
             _ => false,
         }

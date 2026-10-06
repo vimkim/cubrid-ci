@@ -1,5 +1,6 @@
 pub mod build_info;
 pub mod cli;
+pub mod commit_collect;
 pub mod config;
 pub mod diff;
 pub mod doctor;

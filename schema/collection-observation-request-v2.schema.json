@@ -1,0 +1,249 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/collection-observation-request-v2.schema.json",
+  "title": "cubrid-ci collection observation request v2",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "observation_id",
+    "repository",
+    "commit",
+    "started_at",
+    "requested_suites",
+    "fetch_concurrency",
+    "binary_budget",
+    "selection"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 2
+    },
+    "observation_id": {
+      "type": "string",
+      "minLength": 1
+    },
+    "repository": {
+      "const": "CUBRID/cubrid"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "requested_suites": {
+      "type": "array",
+      "items": {
+        "enum": [
+          "test_medium",
+          "test_sql",
+          "test_shell"
+        ]
+      },
+      "minItems": 1,
+      "uniqueItems": true
+    },
+    "fetch_concurrency": {
+      "type": "object",
+      "required": [
+        "value",
+        "source"
+      ],
+      "properties": {
+        "value": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "source": {
+          "enum": [
+            "command_line",
+            "environment",
+            "config_file",
+            "default"
+          ]
+        }
+      },
+      "additionalProperties": false
+    },
+    "binary_budget": {
+      "type": "object",
+      "required": [
+        "include",
+        "per_file_bytes",
+        "total_bytes"
+      ],
+      "properties": {
+        "include": {
+          "type": "boolean"
+        },
+        "per_file_bytes": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "total_bytes": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "selection": {
+      "type": "object",
+      "required": [
+        "observed_at",
+        "mode",
+        "coverage",
+        "commit",
+        "candidates",
+        "runs"
+      ],
+      "properties": {
+        "observed_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "mode": {
+          "enum": [
+            "exact_commit_links",
+            "explicit_run"
+          ]
+        },
+        "coverage": {
+          "type": "string",
+          "minLength": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{40}$"
+        },
+        "baseline": {
+          "type": "object",
+          "required": [
+            "pr_number",
+            "pr_url",
+            "head_ref",
+            "head_sha",
+            "target_ref",
+            "target_sha",
+            "merge_base",
+            "observed_at"
+          ],
+          "properties": {
+            "pr_number": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "pr_url": {
+              "type": "string",
+              "format": "uri"
+            },
+            "head_ref": {
+              "type": "string"
+            },
+            "head_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "target_ref": {
+              "type": "string"
+            },
+            "target_sha": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "merge_base": {
+              "type": "string",
+              "pattern": "^[0-9a-f]{40}$"
+            },
+            "observed_at": {
+              "type": "string",
+              "format": "date-time"
+            }
+          },
+          "additionalProperties": false
+        },
+        "candidates": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "suite",
+              "source",
+              "id",
+              "run_id",
+              "reported_at",
+              "state",
+              "detail_url"
+            ],
+            "properties": {
+              "suite": {
+                "enum": [
+                  "test_medium",
+                  "test_sql",
+                  "test_shell"
+                ]
+              },
+              "source": {
+                "enum": [
+                  "commit_status",
+                  "check_run",
+                  "explicit_run"
+                ]
+              },
+              "id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "run_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "reported_at": {
+                "type": "string",
+                "format": "date-time"
+              },
+              "state": {
+                "enum": [
+                  "SUCCESS",
+                  "FAILURE",
+                  "ERROR",
+                  "PENDING",
+                  "UNREPORTED"
+                ]
+              },
+              "detail_url": {
+                "type": "string",
+                "format": "uri"
+              }
+            },
+            "additionalProperties": false
+          }
+        },
+        "runs": {
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[1-9][0-9]*$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "required": [
+              "id",
+              "run_attempt",
+              "repository",
+              "path",
+              "status"
+            ]
+          }
+        },
+        "requested_attempt": {
+          "type": "integer",
+          "minimum": 1
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false
+}

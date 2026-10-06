@@ -47,6 +47,41 @@ async fn main() -> ExitCode {
         };
     }
 
+    if matches!(
+        &cli.command,
+        Commands::CollectCommit(_) | Commands::CollectBase(_)
+    ) {
+        let progress = TerminalProgress::new(cli.verbose == 0);
+        let collection = match &cli.command {
+            Commands::CollectCommit(args) => cubrid_ci::commit_collect::run(args, &progress).await,
+            Commands::CollectBase(args) => {
+                cubrid_ci::commit_collect::run_base(args, &progress).await
+            }
+            _ => unreachable!(),
+        };
+        progress.clear();
+        return match collection {
+            Ok(result) => {
+                if cli.json {
+                    match serde_json::to_string_pretty(&result) {
+                        Ok(json) => println!("{json}"),
+                        Err(error) => {
+                            eprintln!("error: {error}");
+                            return ExitCode::from(6);
+                        }
+                    }
+                } else {
+                    println!("{}", result.human_summary());
+                }
+                ExitCode::from(result.exit_code())
+            }
+            Err(error) => {
+                emit_error(&cli, &error);
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
+
     if let Commands::Collect(args) = &cli.command {
         let progress = TerminalProgress::new(cli.verbose == 0);
         let collection = cubrid_ci::gha_collect::run_with_progress(args, &progress).await;

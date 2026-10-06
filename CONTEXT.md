@@ -28,7 +28,7 @@ The local evidence-availability outcome for one requested shard: retained, faile
 _Avoid_: Shard result
 
 **Selected commit**:
-The exact CUBRID commit for which an evidence snapshot is requested. It is the local checkout commit for an implicit worktree request and an explicitly supplied commit for an explicit pull-request request.
+The exact CUBRID commit for which an evidence snapshot is requested. It is the local checkout commit for an implicit worktree request, an explicitly supplied Engine commit for commit collection, or the resolved merge base for baseline collection. An explicit PR-head collection still requires its supplied commit to equal the published head.
 _Avoid_: Current commit
 
 **Suite result**:
@@ -40,7 +40,7 @@ Confirmation that every requested terminal suite was identity-validated and its 
 _Avoid_: CI success
 
 **Suite execution**:
-One provider run and attempt selected through a suite status attached to the selected commit. Different suites in one evidence snapshot may select different executions.
+One provider run and attempt selected through evidence links attached to the selected commit, or through an explicit historical run selection. Different suites in one evidence snapshot may select different executions.
 _Avoid_: Build, attempt
 
 **Unfinished suite**:
@@ -98,3 +98,14 @@ _Avoid_: Test failure
 **Failure analysis**:
 A reasoned interpretation of failure evidence that separates observations, inferences, and unknowns and assesses a failure's relationship to the pull request.
 _Avoid_: Evidence collection
+
+**Exact merge-base baseline**:
+An evidence snapshot for the unique merge-base Engine commit resolved from a pinned PR head and target tip. Nearby-commit evidence is context, not this baseline.
+_Avoid_: Target-tip baseline, latest target CI
+
+**Baseline relationship**:
+The observed PR head and target identities together with their resolved merge-base identity. It relates two evidence snapshots without treating the baseline as the PR head.
+
+**Explicit run selection**:
+A request to inspect a specific provider execution for a selected Engine commit. It identifies a candidate whose tested Engine still requires provenance validation.
+_Avoid_: Verified commit status

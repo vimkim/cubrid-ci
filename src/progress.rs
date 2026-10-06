@@ -72,7 +72,7 @@ impl CollectProgress for TerminalProgress {
                 completed,
                 total,
             } => self.draw(completed, total, suite.job_name()),
-            ProgressEvent::Verifying { total } => self.draw(total, total, "verifying PR head"),
+            ProgressEvent::Verifying { total } => self.draw(total, total, "verifying identity"),
             ProgressEvent::Finished => self.clear(),
         }
     }

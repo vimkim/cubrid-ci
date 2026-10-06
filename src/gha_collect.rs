@@ -56,7 +56,10 @@ pub struct CollectResult {
     pub schema_version: u32,
     pub ok: bool,
     pub repository: String,
-    pub pr: PrIdentity,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr: Option<PrIdentity>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub selection: Option<crate::commit_collect::CommitSelection>,
     pub commit: String,
     pub collected_at: DateTime<Utc>,
     pub output_dir: PathBuf,
@@ -132,10 +135,10 @@ struct SuiteResources<'a> {
 }
 
 #[derive(Clone)]
-struct PinnedRun {
-    attempt: u64,
-    json: Arc<Vec<u8>>,
-    context: Arc<crate::gha_evidence::RunContextCache>,
+pub(crate) struct PinnedRun {
+    pub(crate) attempt: u64,
+    pub(crate) json: Arc<Vec<u8>>,
+    pub(crate) context: Arc<crate::gha_evidence::RunContextCache>,
 }
 
 struct PinnedExecution {
@@ -174,9 +177,12 @@ impl CollectResult {
             "incomplete evidence"
         };
         format!(
-            "collected {completeness} snapshot for {}#{} at {} -> {}\n{}",
+            "collected {completeness} snapshot for {}{} at {} -> {}\n{}",
             self.repository,
-            self.pr.number,
+            self.pr
+                .as_ref()
+                .map(|pr| format!("#{}", pr.number))
+                .unwrap_or_default(),
             &self.commit[..7],
             self.output_dir.display(),
             suites
@@ -260,6 +266,20 @@ pub async fn run_with_progress(
         total: total_suites,
     });
 
+    collect_selected(args, snapshot, selected_commit, progress).await
+}
+
+pub(crate) async fn collect_selected(
+    args: &CollectArgs,
+    snapshot: StatusSnapshot,
+    selected_commit: String,
+    progress: &dyn CollectProgress,
+) -> Result<CollectResult, AppError> {
+    let requested_suites = Suite::ALL
+        .into_iter()
+        .filter(|suite| args.suite.is_empty() || args.suite.contains(suite))
+        .collect::<Vec<_>>();
+    let total_suites = requested_suites.len();
     let config = ResolvedConfig::load(ConfigOverride {
         data_dir: args.data_dir.clone(),
         artifact_base: args.artifact_base.clone(),
@@ -268,18 +288,25 @@ pub async fn run_with_progress(
     let output_dir = config
         .data_dir
         .join("github-actions/CUBRID-cubrid")
-        .join(format!("pr-{}", snapshot.pr.number))
+        .join(
+            snapshot
+                .pr
+                .as_ref()
+                .map(|pr| format!("pr-{}", pr.number))
+                .unwrap_or_else(|| "commits".to_owned()),
+        )
         .join(&selected_commit);
-    let pr = PrIdentity {
-        number: snapshot.pr.number,
-        url: snapshot.pr.url.clone(),
-        title: snapshot.pr.title.clone(),
-        head_sha: snapshot.pr.head_sha.clone(),
-    };
+    let pr = snapshot.pr.as_ref().map(|pr| PrIdentity {
+        number: pr.number,
+        url: pr.url.clone(),
+        title: pr.title.clone(),
+        head_sha: pr.head_sha.clone(),
+    });
     let observation = CollectionObservation::begin(ObservationParameters {
         output_dir: &output_dir,
         repository: &snapshot.repository,
-        pr: &pr,
+        pr: pr.as_ref(),
+        selection: snapshot.selection.as_ref(),
         commit: &selected_commit,
         requested_suites: &requested_suites,
         fetch_concurrency: config.fetch_concurrency,
@@ -398,11 +425,22 @@ pub async fn run_with_progress(
     let ok = suites
         .values()
         .all(|suite| suite.state == SuiteState::Completed);
+    // An explicit run is a requested candidate, not a commit-attached status.
+    if snapshot
+        .selection
+        .as_ref()
+        .is_some_and(|selection| selection.mode == "explicit_run")
+    {
+        for suite in suites.values_mut() {
+            suite.status = None;
+        }
+    }
     let result = CollectResult {
-        schema_version: 2,
+        schema_version: if snapshot.selection.is_some() { 3 } else { 2 },
         ok,
         repository: snapshot.repository,
         pr,
+        selection: snapshot.selection,
         commit: selected_commit.clone(),
         collected_at: Utc::now(),
         output_dir: output_dir.clone(),
@@ -412,7 +450,15 @@ pub async fn run_with_progress(
     progress.report(ProgressEvent::Verifying {
         total: total_suites,
     });
-    if let Err(error) = verify_pr_head(snapshot.pr.number, &selected_commit) {
+    if let Some(pr) = &snapshot.pr
+        && let Err(error) = verify_pr_head(pr.number, &selected_commit)
+    {
+        observation.finish_error(&error, binary_bytes_remaining, &binary_consumption)?;
+        return Err(error);
+    }
+    if let Some(selection) = &result.selection
+        && let Err(error) = selection.verify_runs()
+    {
         observation.finish_error(&error, binary_bytes_remaining, &binary_consumption)?;
         return Err(error);
     }
@@ -446,7 +492,12 @@ fn pin_execution(
         let run = match pinned_runs.get(&run_id) {
             Some(run) => run.clone(),
             None => {
-                let run = load_actions_run(run_id).map_err(Arc::new);
+                let run = if let Some(selection) = &snapshot.selection {
+                    selection.pinned_run(run_id)
+                } else {
+                    load_actions_run(run_id)
+                }
+                .map_err(Arc::new);
                 pinned_runs.insert(run_id, run.clone());
                 run
             }
@@ -505,7 +556,7 @@ fn select_commit(args: &CollectArgs) -> Result<String, AppError> {
     validate_full_sha(commit.trim())
 }
 
-fn validate_full_sha(value: &str) -> Result<String, AppError> {
+pub(crate) fn validate_full_sha(value: &str) -> Result<String, AppError> {
     if value.len() == 40 && value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
         Ok(value.to_ascii_lowercase())
     } else {
@@ -596,7 +647,7 @@ fn read_capped(mut reader: impl Read, limit: usize) -> std::io::Result<Vec<u8>> 
     Ok(retained)
 }
 
-fn canonical_pr(pr: &str) -> Result<String, AppError> {
+pub(crate) fn canonical_pr(pr: &str) -> Result<String, AppError> {
     if !pr.is_empty() && pr.bytes().all(|byte| byte.is_ascii_digit()) {
         return Ok(format!("https://github.com/CUBRID/cubrid/pull/{pr}"));
     }
@@ -628,6 +679,10 @@ fn validate_snapshot(
     commit: &str,
     explicit: bool,
 ) -> Result<(), AppError> {
+    let pr_identity = snapshot
+        .pr
+        .as_ref()
+        .ok_or_else(|| AppError::Integrity("PR status is missing PR identity".to_owned()))?;
     if snapshot.repository != "CUBRID/cubrid" {
         return Err(AppError::Integrity(format!(
             "status command returned repository {}",
@@ -640,18 +695,18 @@ fn validate_snapshot(
             .rsplit('/')
             .next()
             .and_then(|value| value.parse::<u64>().ok());
-        if requested_number != Some(snapshot.pr.number) {
+        if requested_number != Some(pr_identity.number) {
             return Err(AppError::Integrity(format!(
                 "requested PR does not match returned PR #{}",
-                snapshot.pr.number
+                pr_identity.number
             )));
         }
     }
-    if !snapshot.pr.head_sha.eq_ignore_ascii_case(commit) {
+    if !pr_identity.head_sha.eq_ignore_ascii_case(commit) {
         let mode = if explicit { "selected" } else { "local HEAD" };
         return Err(AppError::Integrity(format!(
             "{mode} commit {commit} does not match published PR head {}",
-            snapshot.pr.head_sha
+            pr_identity.head_sha
         )));
     }
     Ok(())
@@ -711,6 +766,19 @@ async fn select_suite(
     let execution = pinned_execution.identity;
     let run_id = execution.run_id;
     let attempt = execution.attempt;
+    if let Some(selection) = &snapshot.selection {
+        if selection.is_old_attempt(run_id)
+            && !resources
+                .evidence_dir
+                .join(format!(
+                    "providers/github-actions/runs/{run_id}/attempts/{attempt}/{}/summary.json",
+                    suite.job_name()
+                ))
+                .is_file()
+        {
+            return failed_suite_with_identity(suite, status.clone(), execution, AppError::Unavailable("historical attempt requires an existing validated local summary; remote artifacts are not attempt-addressable".to_owned()));
+        }
+    }
     if !status.state.eq_ignore_ascii_case("pending") {
         let request = crate::gha_evidence::SuiteRequest {
             suite,
@@ -818,7 +886,7 @@ fn failed_suite_with_identity(
     )
 }
 
-fn actions_run_id(value: &str) -> Result<u64, AppError> {
+pub(crate) fn actions_run_id(value: &str) -> Result<u64, AppError> {
     let url = Url::parse(value)
         .map_err(|_| AppError::Integrity("suite status has an invalid Actions URL".to_owned()))?;
     if url.scheme() != "https" || url.host_str() != Some("github.com") {
@@ -887,17 +955,19 @@ fn gh_api_output(endpoint: &str) -> Result<Vec<u8>, AppError> {
 }
 
 #[derive(Debug, Deserialize)]
-struct StatusSnapshot {
-    repository: String,
-    pr: StatusPr,
-    #[serde(default)]
-    checks: Vec<StatusCheck>,
+pub(crate) struct StatusSnapshot {
+    pub(crate) repository: String,
+    pub(crate) pr: Option<StatusPr>,
     #[serde(skip)]
-    raw_json: Vec<u8>,
+    pub(crate) selection: Option<crate::commit_collect::CommitSelection>,
+    #[serde(default)]
+    pub(crate) checks: Vec<StatusCheck>,
+    #[serde(skip)]
+    pub(crate) raw_json: Vec<u8>,
 }
 
 #[derive(Debug, Deserialize)]
-struct StatusPr {
+pub(crate) struct StatusPr {
     number: u64,
     title: String,
     url: String,
@@ -905,11 +975,11 @@ struct StatusPr {
 }
 
 #[derive(Debug, Deserialize)]
-struct StatusCheck {
-    name: String,
-    provider: String,
-    freshness: String,
-    current: Option<StatusIdentity>,
+pub(crate) struct StatusCheck {
+    pub(crate) name: String,
+    pub(crate) provider: String,
+    pub(crate) freshness: String,
+    pub(crate) current: Option<StatusIdentity>,
 }
 
 #[derive(Debug, Deserialize)]
