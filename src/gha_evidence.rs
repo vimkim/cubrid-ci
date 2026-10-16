@@ -833,13 +833,19 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw.join(format!("shards/{shard}/shard.done")),
             MAX_INDEX_BYTES,
         )?;
-        let assigned = match validate_shard_done(&shard_done, &shard, layout.remote_name) {
-            Ok(assigned) => assigned,
-            Err(AppError::JobLevel(message)) => {
-                return job_level_failure(message, &resolution.jobs, &provider_raw);
-            }
-            Err(error) => return Err(error),
+        let shard_counts = match layout.result_format {
+            ResultFormat::SummaryInfo => parse_summary_info(&workflow_result)?,
+            ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
         };
+        let assigned =
+            match validate_shard_done(&shard_done, &shard, layout.remote_name, shard_counts.failed)
+            {
+                Ok(assigned) => assigned,
+                Err(AppError::JobLevel(message)) => {
+                    return job_level_failure(message, &resolution.jobs, &provider_raw);
+                }
+                Err(error) => return Err(error),
+            };
         let planned = plan_table
             .get(&shard)
             .copied()
@@ -849,10 +855,6 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 "shard {shard} completion says {assigned} assigned but plan.tsv says {planned}"
             )));
         }
-        let shard_counts = match layout.result_format {
-            ResultFormat::SummaryInfo => parse_summary_info(&workflow_result)?,
-            ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
-        };
         if shard_counts.passed + shard_counts.failed + shard_counts.skipped != planned {
             return job_level_failure(
                 format!(
@@ -2217,6 +2219,7 @@ fn validate_shard_done(
     value: &str,
     expected_index: &str,
     expected_suite: &str,
+    failed_cases: u64,
 ) -> Result<u64, AppError> {
     let fields = parse_key_values(value)?;
     if fields.get("suite") != Some(&expected_suite) || fields.get("idx") != Some(&expected_index) {
@@ -2224,12 +2227,28 @@ fn validate_shard_done(
             "shard {expected_index} completion record has inconsistent identity"
         )));
     }
-    let ctp_rc = fields
-        .get("ctp_rc")
-        .ok_or_else(|| AppError::JobLevel(format!("shard {expected_index} has no ctp_rc")))?;
-    if *ctp_rc != "0" {
+    let (status_field, status) = match (fields.get("test_rc"), fields.get("ctp_rc")) {
+        (Some(test_rc), Some(ctp_rc)) if test_rc != ctp_rc => {
+            return Err(AppError::Integrity(format!(
+                "shard {expected_index} has conflicting test_rc and ctp_rc"
+            )));
+        }
+        (Some(status), _) => ("test_rc", *status),
+        (None, Some(status)) => ("ctp_rc", *status),
+        (None, None) => {
+            return Err(AppError::JobLevel(format!(
+                "shard {expected_index} has no test_rc or ctp_rc"
+            )));
+        }
+    };
+    let exit_code = status.parse::<u8>().map_err(|_| {
+        AppError::Malformed(format!("shard {expected_index} has invalid {status_field}"))
+    })?;
+    // The workflow records the test command's exit, including 1 for failed cases.
+    // Counts, JUnit, and the failed-case inventory must still reconcile below.
+    if exit_code > 1 || (exit_code == 1 && failed_cases == 0) {
         return Err(AppError::JobLevel(format!(
-            "shard {expected_index} exited abnormally with ctp_rc={ctp_rc}"
+            "shard {expected_index} exited abnormally with {status_field}={status}"
         )));
     }
     fields
@@ -2498,6 +2517,75 @@ struct ActionRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_retained_workflow_test_rc_completion() {
+        let marker = include_str!("../tests/fixtures/pr7925-medium-shard.done");
+        assert_eq!(validate_shard_done(marker, "00", "medium", 0).unwrap(), 975);
+        let marker = include_str!("../tests/fixtures/pr7925-shell-shard.done");
+        assert_eq!(validate_shard_done(marker, "30", "shell", 1).unwrap(), 66);
+    }
+
+    #[test]
+    fn completion_status_aliases_require_consistent_testcase_evidence() {
+        for field in ["test_rc", "ctp_rc"] {
+            for (status, failed, accepted) in [
+                (0, 0, true),
+                (0, 1, true),
+                (1, 1, true),
+                (1, 0, false),
+                (2, 1, false),
+                (137, 1, false),
+            ] {
+                let marker = format!("suite=sql\nidx=00\nassigned=1\n{field}={status}\n");
+                let result = validate_shard_done(&marker, "00", "sql", failed);
+                if accepted {
+                    assert_eq!(result.unwrap(), 1);
+                } else {
+                    assert!(matches!(result, Err(AppError::JobLevel(_))));
+                }
+            }
+        }
+        for status in ["", "invalid", "-1", "256"] {
+            for field in ["test_rc", "ctp_rc"] {
+                let marker = format!("suite=sql\nidx=00\nassigned=1\n{field}={status}\n");
+                assert!(matches!(
+                    validate_shard_done(&marker, "00", "sql", 1),
+                    Err(AppError::Malformed(_))
+                ));
+            }
+        }
+    }
+
+    #[test]
+    fn completion_markers_reject_missing_or_ambiguous_statuses() {
+        let marker = "suite=sql\nidx=00\nassigned=1\n";
+        assert!(matches!(
+            validate_shard_done(marker, "00", "sql", 1),
+            Err(AppError::JobLevel(_))
+        ));
+        for status in ["test_rc=0\nctp_rc=1\n", "test_rc=1\nctp_rc=0\n"] {
+            assert!(matches!(
+                validate_shard_done(&format!("{marker}{status}"), "00", "sql", 1),
+                Err(AppError::Integrity(_))
+            ));
+        }
+        for field in ["test_rc", "ctp_rc"] {
+            let duplicate = format!("{marker}{field}=0\n{field}=0\n");
+            assert!(matches!(
+                validate_shard_done(&duplicate, "00", "sql", 0),
+                Err(AppError::Malformed(_))
+            ));
+        }
+        assert_eq!(
+            validate_shard_done(&format!("{marker}test_rc=0\nctp_rc=0\n"), "00", "sql", 0).unwrap(),
+            1
+        );
+        assert!(matches!(
+            validate_shard_done(&format!("{marker}test_rc=0\n"), "01", "sql", 0),
+            Err(AppError::Integrity(_))
+        ));
+    }
 
     #[test]
     fn parses_junit_failure_body_without_losing_diff() {

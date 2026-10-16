@@ -54,6 +54,12 @@ All commands accept `--json`. A fully collected red suite exits successfully:
 CI outcome is data, while the process exit reports collection completeness and
 trustworthiness.
 
+Shard completion records support the workflow's `test_rc` field and the legacy
+`ctp_rc` field. Conflicting fields and malformed exit codes fail validation.
+Exit code 1 permits collection only when the shard reports failed testcases.
+Assigned counts, JUnit records, and the failed-case inventory must still agree.
+Other nonzero exit codes remain job-level failures.
+
 Human-readable collection output reports each suite's CI outcome and trusted
 test counts. For example, a red suite may appear as
 `test_shell: FAILURE (3 failed / 3256 executed)` while the collection command

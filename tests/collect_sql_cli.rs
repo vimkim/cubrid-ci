@@ -16,6 +16,141 @@ use support::HttpProxy;
 const SHA: &str = "1111111111111111111111111111111111111111";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_rc_one_with_reconciled_testcase_failure_is_complete_and_reusable() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    let marker = "suite=sql\nidx=00\nassigned=1\ntest_rc=1\n";
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/shard/00/shard.done"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(marker))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let first = command(commands.path(), data.path()).output().unwrap();
+    assert!(
+        first.status.success(),
+        "{}",
+        String::from_utf8_lossy(&first.stdout)
+    );
+    let result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "completed");
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let summary = root.join(result["suites"]["test_sql"]["summary"].as_str().unwrap());
+    let summary_bytes = fs::read(&summary).unwrap();
+    validate_schema(
+        include_str!("../schema/suite-summary-v2.schema.json"),
+        &summary_bytes,
+    );
+    let parsed: Value = serde_json::from_slice(&summary_bytes).unwrap();
+    assert_eq!(parsed["counts"]["failures"], 1);
+    assert_eq!(parsed["verdict"], "fail");
+    let raw_marker = summary.parent().unwrap().join("raw/shards/00/shard.done");
+    assert_eq!(fs::read_to_string(&raw_marker).unwrap(), marker);
+    let requests = server.received_requests().await.unwrap().len();
+
+    let replay = command(commands.path(), data.path()).output().unwrap();
+    assert!(
+        replay.status.success(),
+        "{}",
+        String::from_utf8_lossy(&replay.stdout)
+    );
+    assert_eq!(fs::read(&summary).unwrap(), summary_bytes);
+    assert_eq!(fs::read_to_string(&raw_marker).unwrap(), marker);
+    assert_eq!(server.received_requests().await.unwrap().len(), requests);
+    assert_eq!(fs::read_dir(root.join("observations")).unwrap().count(), 2);
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_rc_one_without_testcase_failures_is_job_level_failure() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:ok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path("/runs/123/sql/shard/00/shard.done"))
+        .respond_with(
+            ResponseTemplate::new(200)
+                .set_body_string("suite=sql\nidx=00\nassigned=1\ntest_rc=1\n"),
+        )
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "job_level_failure");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("test_rc=1")
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_rc_one_does_not_waive_junit_reconciliation() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok 1200ms\n",
+        SHA,
+        1,
+    )
+    .await;
+    for (endpoint, body) in [
+        ("shard.done", "suite=sql\nidx=00\nassigned=1\ntest_rc=1\n"),
+        (
+            "test-results/results.xml",
+            "<testsuite><testcase name=\"sql/bugs/cases/bug_123.sql\"/></testsuite>",
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(format!("/runs/123/sql/shard/00/{endpoint}")))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+    }
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("workflow result and JUnit counts disagree")
+    );
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    assert!(
+        !root
+            .join("providers/github-actions/runs/123/attempts/2/test_sql/summary.json")
+            .exists()
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn terminal_red_sql_suite_is_a_successful_evidence_collection() {
     let server = MockServer::start().await;
     mount_evidence(
