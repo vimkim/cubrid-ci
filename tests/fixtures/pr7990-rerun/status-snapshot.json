@@ -1,0 +1,360 @@
+{
+  "schema_version": 1,
+  "repository": "CUBRID/cubrid",
+  "fetched_at": "2026-10-26T14:18:56+00:00",
+  "complete": true,
+  "pr": {
+    "number": 7990,
+    "title": "[CBRD-26357] Add out-of-row overflow storage",
+    "url": "https://github.com/CUBRID/cubrid/pull/7990",
+    "head_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+    "state": "OPEN",
+    "draft": false,
+    "review_decision": "REVIEW_REQUIRED",
+    "mergeability": "MERGEABLE"
+  },
+  "checks": [
+    {
+      "name": "ci/circleci: build",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "ci/circleci: build_debug",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "ci/circleci: download-build",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "ci/circleci: test_medium",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "ci/circleci: test_shell",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "ci/circleci: test_sql",
+      "provider": "CircleCI",
+      "expected": true,
+      "freshness": "not_observed",
+      "current": null,
+      "previous": null
+    },
+    {
+      "name": "github-actions: Check TC PRs",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "FAILURE",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323469235/job/121574042127",
+        "reported_at": "2026-10-26T12:33:51Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "gha-ci: build (debug)",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40334404336",
+        "reported_at": "2026-10-26T13:53:17Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "gha-ci: build (release)",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40334404336",
+        "reported_at": "2026-10-26T13:53:16Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "gha-ci: test_medium",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40334404336",
+        "reported_at": "2026-10-26T13:57:03Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "gha-ci: test_shell",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40334404336",
+        "reported_at": "2026-10-26T13:57:03Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "gha-ci: test_sql",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40334404336",
+        "reported_at": "2026-10-26T13:57:06Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: Re-check stale verdicts",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323469235/job/121574043842",
+        "reported_at": "2026-10-26T12:33:40Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: build (debug)",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121574067375",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: build (release)",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121574067379",
+        "reported_at": "2026-10-26T12:39:02Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: build status",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121576683532",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: code-style",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323474421/job/121574058479",
+        "reported_at": "2026-10-26T12:34:28Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: collect",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121576683734",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: cppcheck",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323474421/job/121574057932",
+        "reported_at": "2026-10-26T12:35:41Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: gate",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121574020366",
+        "reported_at": "2026-10-26T12:33:44Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: license",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323474421/job/121574058143",
+        "reported_at": "2026-10-26T12:33:57Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: memory-monitor-check",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323474421/job/121574058232",
+        "reported_at": "2026-10-26T12:33:55Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: nightly batch",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121574021897",
+        "reported_at": "2026-10-26T12:33:37Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: plan",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121576683844",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: pr-style",
+      "provider": "GitHub Actions",
+      "expected": true,
+      "freshness": "current",
+      "current": {
+        "state": "SUCCESS",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323474421/job/121574058227",
+        "reported_at": "2026-10-26T12:33:55Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: shard ${{ matrix.suite }} ${{ matrix.i }}",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121576683500",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: status ${{ matrix.suite }}",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121576684421",
+        "reported_at": "2026-10-26T12:39:38Z"
+      },
+      "previous": null
+    },
+    {
+      "name": "github-actions: status (pending)",
+      "provider": "GitHub Actions",
+      "expected": false,
+      "freshness": "current",
+      "current": {
+        "state": "SKIPPED",
+        "reported_for_sha": "52987c654b6f04734cad01c11c80c7f30358b33c",
+        "detail_url": "https://github.com/CUBRID/cubrid/actions/runs/40323462920/job/121574069076",
+        "reported_at": "2026-10-26T12:33:44Z"
+      },
+      "previous": null
+    }
+  ],
+  "history": {
+    "status": "disabled",
+    "limit": 0,
+    "searched": 0,
+    "available": null,
+    "truncated": null
+  },
+  "errors": []
+}

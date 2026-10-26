@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<testsuites>
+  <testsuite name="shell" tests="3" skipped="0" timestamp="Mon Oct 26 22:54:33 KST 2026">
+    <testcase classname="https://github.com/CUBRID/cubrid-testcases-private-ex/blob/develop/shell/_06_issues/_12_2h/bug_bts_7456_1/cases/bug_bts_7456_1.sh" name="shell/_06_issues/_12_2h/bug_bts_7456_1/cases/bug_bts_7456_1.sh" file="cubrid-testcases-private-ex/shell/_06_issues/_12_2h/bug_bts_7456_1/cases/bug_bts_7456_1.sh" time="57.086"></testcase>
+    <testcase classname="https://github.com/CUBRID/cubrid-testcases-private-ex/blob/develop/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" name="shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" file="cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" time="29.573"></testcase>
+    <testcase classname="https://github.com/CUBRID/cubrid-testcases-private-ex/blob/develop/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" name="shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" file="cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" time="11.229"></testcase>
+  </testsuite>
+</testsuites>

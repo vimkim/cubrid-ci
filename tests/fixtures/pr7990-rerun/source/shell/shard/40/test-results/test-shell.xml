@@ -1,0 +1,429 @@
+<testsuite tests="1" failures="1"><testcase classname="https://github.com/CUBRID/cubrid-testcases-private-ex/blob/develop/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" name="shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" file="cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.sh" time="11.623">
+      <failure message="Test failed" type="TestFailure">
+EnvIdentify: EnvId=local[parallel-40]
+Hostname: cubrid-arc-586zc-runner-2xgwv-workflow
+temp_enc_06-1 : NOK
+diff result.log result.answer failed
+TDE: qmgr_process_query(): includes_tde_class = 1		TDE: qmgr_process_query(): includes_tde_class = 1
+							      &gt;	TDE: qmgr_process_query(): includes_tde_class = 1
+22:15:03----/home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases--- time=10
+============================= CONSOLE OUTPUT =============================
+++ begin_time=0
+++ end_time=0
+++ need_count_time=1
+++ cubrid_major=
+++ cubrid_minor=
+++ IGNORE_TEST_PERFORMANCE=
+++ '[' '!' -n en_US ']'
++++ get_os
+++++ uname
++++ osname=Linux
++++ case "$osname" in
++++ echo Linux
+++ export OS=Linux
+++ OS=Linux
+++ '[' Linux = Windows_NT ']'
+++ source /home/cubrid-testtools/CTP/shell/init_path/shell_utils.sh
++ init test
+++ date
++ echo '[INFO] TEST START (Mon Oct 26 22:14:53 KST 2026)'
+[INFO] TEST START (Mon Oct 26 22:14:53 KST 2026)
+++ pwd
++ cur_path=/home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases
++ cd /home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases
++ case_no=1
++ full_name=temp_enc_06.sh
++ answer_no=1
++ mode=test
++ '[' 1 -eq 1 ']'
+++ get_curr_second
++++ date +%s
+++ str=1793020493
+++ echo 1793020493
++ begin_time=1793020493
+++ date +%Y-%m-%d
++ date_str=2026-10-26
+++ date +%H:%M:%S
++ time_str=22:14:53
++ echo 22:14:53----/home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases---- test start
+/home/cubrid-testtools/CTP/shell/init_path/init.sh: line 768: /home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/: Is a directory
++ '[' Linux = Windows_NT ']'
++ export REAL_INIT_PATH=/home/cubrid-testtools/CTP/shell/init_path
++ REAL_INIT_PATH=/home/cubrid-testtools/CTP/shell/init_path
+++ cubrid_rel
+++ grep 32bit
+++ wc -l
++ is_cubrid_32bits=0
++ '[' 0 == 1 ']'
++ CUBRID_BITS=64
++ export CUBRID_BITS
++ rm -rf /home/CUBRID/log/manager /home/CUBRID/log/pl /home/CUBRID/log/server
++ '[' Linux = AIX ']'
++ objext=_objects
++ schext=_schema
++ idxext=_indexes
++ trgext=_trigger
++ PATH=/home/cubrid-testtools/CTP/shell/init_path/../../bin:/home/cubrid-testtools/CTP/shell/init_path/../../common/script:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/home/CUBRID/bin:/usr/sbin:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/bin
++ '[' Linux = Windows_NT ']'
++ CLASSPATH=/home/CUBRID/jdbc/cubrid_jdbc.jar:/home/cubrid-testtools/CTP/shell/init_path/commonforjdbc.jar:.
++ LD_LIBRARY_PATH=/home/cubrid-testtools/CTP/shell/init_path/commonforc/lib:/home/CUBRID/lib:/home/CUBRID/cci/lib:
++ rm '/home/CUBRID/log/server/*.err'
++ cubrid service stop
+++ cubrid service is not running.
++ pkill cub
++ chmod u+x /home/cubrid-testtools/CTP/shell/init_path/cubrid
++ PATH=/home/cubrid-testtools/CTP/shell/init_path:/usr/lib/jvm/java-1.8.0/bin:/home/cubrid-testtools/CTP/shell/init_path/../../bin:/home/cubrid-testtools/CTP/shell/init_path/../../common/script:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/home/CUBRID/bin:/usr/sbin:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/bin
++ export PATH
++ export CLASSPATH
++ export LD_LIBRARY_PATH
++ export LIBRARY_PATH
+++ ini.sh -s %BROKER1 /home/CUBRID/conf/cubrid_broker.conf SERVICE
+++ grep -iw ON
+++ grep -v grep
+++ wc -l
++ isAvailableServiceForBroker1=1
++ '[' 1 -ne 0 ']'
+++ ini.sh -s %BROKER1 /home/CUBRID/conf/cubrid_broker.conf BROKER_PORT
++ broker_port=13091
++ sed -i 's@&lt;port&gt;[0-9]*&lt;/port&gt;@&lt;port&gt;13091&lt;/port&gt;@g' /home/cubrid-testtools/CTP/shell/init_path/shell_config.xml
++ '[' test = test ']'
++ run_mode=1
+++ echo temp_enc_06
++ case_name=temp_enc_06
++ result_file=temp_enc_06.result
++ '[' -f temp_enc_06.tar ']'
++ '[' 1 -eq 1 ']'
++ '[' -f temp_enc_06.result ']'
++ rm temp_enc_06.result
++ touch temp_enc_06.result
++ export OS
++ WINDOWS_NOT_SUPPORTED
++ return
+++ cubrid_rel
+++ wc -l
+++ grep debug
++ isDebug=1
++ '[' 1 -eq 0 ']'
+++ echo en_US
++ lang_bak=en_US
++ set_CUBRID_CHARSET ko_KR.utf8
++ parse_build_version
+++ cubrid_rel
+++ awk -F '(' '{print $2}'
+++ grep CUBRID
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ CUBRID_CHARSET=ko_KR.utf8
++ db_name=db23608_tmpenc06
++ mkdir db23608_tmpenc06
++ cd db23608_tmpenc06
++ cubrid_createdb -r db23608_tmpenc06 --db-volume-size=20m --log-volume-size=20m
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb -r db23608_tmpenc06 --db-volume-size=20m --log-volume-size=20m ko_KR.utf8
+Creating database with 64.0M size using locale ko_KR.utf8. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ change_db_parameter er_log_tde=yes
++ '[' Linux = Windows_NT ']'
++ '[' -f /home/CUBRID/conf/cubrid.conf.org ']'
++ cp /home/CUBRID/conf/cubrid.conf /home/CUBRID/conf/cubrid.conf.org
++ change_parameter /home/CUBRID/conf/cubrid.conf er_log_tde=yes
++ filename=/home/CUBRID/conf/cubrid.conf
++ parameter=er_log_tde=yes
++ key=er_log_tde
++ value=yes
+++ echo er_log_tde
+++ sed 's/^ *//g'
++ key=er_log_tde
+++ echo er_log_tde
+++ sed 's/ *$//g'
++ key=er_log_tde
++ '[' -f /home/CUBRID/conf/cubrid.conf ']'
++ '[' er_log_tde '!=' '' ']'
++ cat /home/CUBRID/conf/cubrid.conf
++ grep -v '^er_log_tde *='
++ echo er_log_tde=yes
++ cat /home/CUBRID/conf/cubrid.conf.bak
++ rm /home/CUBRID/conf/cubrid.conf.bak
++ csql -udba -S -c 'create table ttt_enc (a int) encrypt;' db23608_tmpenc06
+Execute OK. (0.001713 sec) Committed. (0.000106 sec) 
++ cubrid server start db23608_tmpenc06
+@ cubrid master start
+++ cubrid master start: success
+@ cubrid server start: db23608_tmpenc06
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ csql -udba -c 'select * from ttt_enc' db23608_tmpenc06
+
+=== &lt;Result of SELECT Command in Line 1&gt; ===
+
+There are no results.
+0 row selected. (0.001370 sec) Committed. (0.000003 sec) 
++ cubrid server stop db23608_tmpenc06
+@ cubrid server stop: db23608_tmpenc06
+
+Server db23608_tmpenc06 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ change_db_parameter max_plan_cache_entries=0
++ '[' Linux = Windows_NT ']'
++ '[' -f /home/CUBRID/conf/cubrid.conf.org ']'
++ change_parameter /home/CUBRID/conf/cubrid.conf max_plan_cache_entries=0
++ filename=/home/CUBRID/conf/cubrid.conf
++ parameter=max_plan_cache_entries=0
++ key=max_plan_cache_entries
++ value=0
+++ echo max_plan_cache_entries
+++ sed 's/^ *//g'
++ key=max_plan_cache_entries
+++ echo max_plan_cache_entries
+++ sed 's/ *$//g'
++ key=max_plan_cache_entries
++ '[' -f /home/CUBRID/conf/cubrid.conf ']'
++ '[' max_plan_cache_entries '!=' '' ']'
++ grep -v '^max_plan_cache_entries *='
++ cat /home/CUBRID/conf/cubrid.conf
++ echo max_plan_cache_entries=0
++ cat /home/CUBRID/conf/cubrid.conf.bak
++ rm /home/CUBRID/conf/cubrid.conf.bak
++ cubrid server start db23608_tmpenc06
+@ cubrid server start: db23608_tmpenc06
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ csql -udba -c 'select * from ttt_enc' db23608_tmpenc06
+
+=== &lt;Result of SELECT Command in Line 1&gt; ===
+
+There are no results.
+0 row selected. (0.002479 sec) Committed. (0.000068 sec) 
++ cubrid server stop db23608_tmpenc06
+@ cubrid server stop: db23608_tmpenc06
+
+Server db23608_tmpenc06 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ grep -r TDE: /home/CUBRID/log/server/db23608_tmpenc06_latest.err
++ grep 'includes_tde_class '
++ compare_result_between_files result.log result.answer
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file result.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=result.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'result.log*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'result.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f result.log ']'
+++ newfilename=result.log
+++ echo result.log
+++ return 1
++ left=result.log
+++ get_best_compat_file result.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=result.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ ls -l 'result.answer*_D*'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'result.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f result.answer ']'
+++ newfilename=result.answer
+++ echo result.answer
+++ return 1
++ right=result.answer
++ '[' result.log == '' ']'
++ '[' result.answer == '' ']'
++ dos2unix result.log
+dos2unix: converting file result.log to Unix format...
++ dos2unix result.answer
+dos2unix: converting file result.answer to Unix format...
++ echo 'start to compare files: diff result.log result.answer'
+start to compare files: diff result.log result.answer
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno result.log result.answer -b
++ local f1=result.log
++ local f2=result.answer
++ local op=-b
++ local tmp1=result.log_temp_diff
++ local tmp2=result.answer_temp_diff
++ cp -f result.log result.log_temp_diff
++ cp -f result.answer result.answer_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' result.log_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' result.answer_temp_diff
++ diff result.log_temp_diff result.answer_temp_diff -b
+1a2
+&gt; TDE: qmgr_process_query(): includes_tde_class = 1
++ write_nok
++ '[' -z '' ']'
++ echo '----------------- 1 : NOK'
+----------------- 1 : NOK
++ echo 'temp_enc_06-1 : NOK'
+++ wc -l
+++ grep 'Internal Error' /home/CUBRID/log/server/db23608_tmpenc06_20261026_2214.err /home/CUBRID/log/server/db23608_tmpenc06_20261026_2215.err /home/CUBRID/log/server/db23608_tmpenc06_latest.err
++ internal_err=0
++ '[' 0 -gt 0 ']'
++ let 'case_no = case_no + 1'
++ echo 'diff result.log result.answer failed'
++ diff_ignore_lineno result.log result.answer -y
++ local f1=result.log
++ local f2=result.answer
++ local op=-y
++ local tmp1=result.log_temp_diff
++ local tmp2=result.answer_temp_diff
++ tee -a /home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases/temp_enc_06.result
++ cp -f result.log result.log_temp_diff
++ cp -f result.answer result.answer_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' result.log_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' result.answer_temp_diff
++ diff result.log_temp_diff result.answer_temp_diff -y
+TDE: qmgr_process_query(): includes_tde_class = 1		TDE: qmgr_process_query(): includes_tde_class = 1
+							      &gt;	TDE: qmgr_process_query(): includes_tde_class = 1
++ let 'answer_no = answer_no + 1'
++ set_CUBRID_CHARSET en_US
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ wc -l
+++ grep debug
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ CUBRID_CHARSET=en_US
++ cubrid deletedb db23608_tmpenc06
++ rm -rf db23608_tmpenc06
++ rm result.log
++ finish
++ rm -f 'userver.err.*'
++ rm -f 'uclient.err.*'
++ rm -f 'client.err.*'
++ rm -rf ./lob
++ cubrid service stop
+@ cubrid broker stop
+++ cubrid broker is not running.
+@ cubrid manager server stop
+++ cubrid manager server is not running.
+@ cubrid master stop
+++ cubrid master stop: success
++ pkill cub
++ '[' 1 -eq 1 ']'
++ count_time
+++ get_curr_second
++++ date +%s
+++ str=1793020503
+++ echo 1793020503
++ end_time=1793020503
++ duration=10
+++ date +%Y-%m-%d
++ date_str=2026-10-26
+++ date +%H:%M:%S
++ time_str=22:15:03
++ echo 22:15:03----/home/cubrid-testcases-private-ex/shell/_36_damson/cbrd_23608_tde/temp_enc_06/cases--- time=10
++ '[' 10 -gt 7200 ']'
++ '[' 10 -gt 3600 ']'
++ '[' 10 -gt 1800 ']'
++ '[' 10 -gt 600 ']'
++ release_broker_sharedmemory
++ '[' Linux == Linux -o Linux == AIX ']'
+++ ipcs
+++ grep root
+++ awk '{print $2}'
++ broker_sid=
++ '[' -n '' ']'
++ delete_ini
++ '[' Linux = Windows_NT ']'
++ cp /home/CUBRID/conf/cubrid.conf.org /home/CUBRID/conf/cubrid.conf
++ restore_all_conf
++ restore_db_conf
++ '[' -f /home/CUBRID/conf/cubrid.conf.org ']'
++ cp /home/CUBRID/conf/cubrid.conf.org /home/CUBRID/conf/cubrid.conf
++ restore_broker_conf
++ '[' -f /home/CUBRID/conf/cubrid_broker.conf.org ']'
++ restore_gateway_conf
++ '[' -f /home/CUBRID/conf/cubrid_gateway.conf.org ']'
++ restore_ha_conf
++ '[' -f /home/CUBRID/conf/cubrid_ha.conf.org ']'
+++ date
++ echo '[INFO] TEST STOP (Mon Oct 26 22:15:04 KST 2026)'
+[INFO] TEST STOP (Mon Oct 26 22:15:04 KST 2026)
+</failure>
+    </testcase>
+    </testsuite>

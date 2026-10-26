@@ -1,0 +1,2 @@
+<testsuite tests="1"><testcase classname="linux_medium_64bit_debug" name="medium/_07_mc_dep/cases/D006_qset0.sql" file="cubrid-testcases/medium/_07_mc_dep/cases/D006_qset0.sql" time="0.037" />
+    </testsuite>

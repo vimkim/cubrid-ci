@@ -791,6 +791,7 @@ async fn select_suite(
             status_snapshot_json: &snapshot.raw_json,
             run_json: &pinned_execution.run_json,
             run_context: &pinned_execution.run_context,
+            lineage: &[],
             fetch_permits: resources.fetch_permits,
             fetch_concurrency: resources.fetch_concurrency,
             acquisition: resources.acquisition,

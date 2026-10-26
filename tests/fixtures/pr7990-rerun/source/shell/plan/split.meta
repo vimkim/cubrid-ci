@@ -1,0 +1,14 @@
+total=3
+unit=case
+sha=52987c654b6f04734cad01c11c80c7f30358b33c
+units=3
+par=3
+timed=3454
+tc_sha='dd12b36a249e48a63725113af59ed4b013c3894a'
+tc_branch='tc/pr-7990'
+rerun_unrun=0
+rerun_short=0
+rerun_gone=0
+rerun_failed=0
+rerun_changed=0
+rerun_since=''

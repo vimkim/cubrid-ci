@@ -43,6 +43,16 @@ _Avoid_: CI success
 One provider run and attempt selected through evidence links attached to the selected commit, or through an explicit historical run selection. Different suites in one evidence snapshot may select different executions.
 _Avoid_: Build, attempt
 
+**Rerun source**:
+The earlier suite execution whose failures, unhandled cases, and changed testcase
+inputs determine a rerun selection. Its independently validated evidence remains
+distinct from the rerun's actual results.
+
+**Carried-forward verdict**:
+The validated source suite verdict retained by a rerun execution that selected no
+cases and reports no changed or unhandled source cases. It establishes no newly
+executed testcase results.
+
 **Unfinished suite**:
 A requested suite that has either not reported a status for the selected commit or has reported a non-terminal status. These states are kept distinct as not observed and running.
 _Avoid_: Missing result

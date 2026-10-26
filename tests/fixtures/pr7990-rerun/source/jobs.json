@@ -1,0 +1,10 @@
+{
+  "jobs": [
+    {
+      "id": 121594127253,
+      "name": "collect",
+      "run_attempt": 1,
+      "conclusion": "failure"
+    }
+  ]
+}

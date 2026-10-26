@@ -74,6 +74,7 @@ pub(crate) struct SuiteRequest<'a> {
     pub status_snapshot_json: &'a [u8],
     pub run_json: &'a [u8],
     pub run_context: &'a RunContextCache,
+    pub lineage: &'a [u64],
     pub fetch_permits: &'a Semaphore,
     pub fetch_concurrency: usize,
     pub acquisition: &'a AcquisitionLedger,
@@ -96,6 +97,19 @@ pub struct SuiteSummary {
     pub counts: TestCounts,
     pub shards: Vec<ShardSummary>,
     pub failures: Vec<FailureRecord>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub commit: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rerun: Option<RerunSource>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RerunSource {
+    pub mode: String,
+    pub run_id: u64,
+    pub attempt: u64,
+    pub summary: PathBuf,
+    pub summary_sha256: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -272,6 +286,11 @@ fn record_suite_fetch<T>(
 }
 
 pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSummary, AppError> {
+    if request.lineage.contains(&request.run_id) || request.lineage.len() >= 32 {
+        return Err(AppError::Integrity(
+            "rerun source lineage is cyclic or exceeds 32 runs".to_owned(),
+        ));
+    }
     let layout = SuiteLayout::for_suite(request.suite);
     let execution_suite_dir = request
         .evidence_dir
@@ -304,11 +323,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     {
         let bytes =
             fs::read(&summary_path).map_err(|source| AppError::storage(&summary_path, source))?;
-        validate_json_schema(
-            "suite-summary-v2",
-            include_str!("../schema/suite-summary-v2.schema.json"),
-            &bytes,
-        )?;
+        validate_summary_schema(&bytes)?;
         let actual_summary_digest = hex::encode(Sha256::digest(&bytes));
         if expected_summary_digest.as_deref() != Some(actual_summary_digest.as_str()) {
             return Err(AppError::Integrity(format!(
@@ -325,6 +340,10 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             || summary.attempt != request.attempt
             || summary.suite != request.suite.job_name()
             || summary
+                .commit
+                .as_deref()
+                .is_some_and(|commit| commit != request.commit)
+            || summary
                 .shards
                 .iter()
                 .any(|shard| !shard.build.sha.eq_ignore_ascii_case(request.commit))
@@ -333,6 +352,9 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 "stored immutable summary does not match {} run {} attempt {}",
                 request.suite, request.run_id, request.attempt
             )));
+        }
+        if let Some(source) = &summary.rerun {
+            validate_rerun_source(&request, source).await?;
         }
         if request.include_binaries {
             validate_binary_inventory(&suite_dir)?;
@@ -363,10 +385,20 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             "Actions run metadata changed after suite selection".to_owned(),
         ));
     }
-    write_string_immutable(
-        &provider_raw.join("github/run.json"),
-        &String::from_utf8_lossy(run_json),
-    )?;
+    let retained_run = provider_raw.join("github/run.json");
+    if retained_run.exists() {
+        let existing: serde_json::Value = serde_json::from_slice(
+            &fs::read(&retained_run).map_err(|source| AppError::storage(&retained_run, source))?,
+        )?;
+        let selected: serde_json::Value = serde_json::from_slice(run_json)?;
+        if existing != selected {
+            return Err(AppError::Integrity(
+                "stored Actions run metadata disagrees with the pinned execution".to_owned(),
+            ));
+        }
+    } else {
+        write_string_immutable(&retained_run, &String::from_utf8_lossy(run_json))?;
+    }
     let run_context = {
         let mut cached = request
             .run_context
@@ -420,6 +452,12 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         AcquisitionStage::PlanMetadata,
     )?;
     let plan = parse_split_meta(&split_meta)?;
+    let source_run = rerun_source_run(&run_context, &plan, &provider_raw)?;
+    let source = if let Some(source_run) = source_run {
+        Some(collect_rerun_source(&request, source_run, &provider_raw).await?)
+    } else {
+        None
+    };
     let planned_index = record_suite_fetch(
         classify_pipeline_fetch(
             fetch_text(
@@ -464,7 +502,11 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         request.suite,
         AcquisitionStage::PlanTable,
     )?;
-    let plan_table = parse_plan_table(&plan_table_text)?;
+    let plan_table = if source.is_some() && plan.total == 0 && plan_table_text.trim().is_empty() {
+        BTreeMap::new()
+    } else {
+        parse_plan_table(&plan_table_text)?
+    };
     if plan_table.values().sum::<u64>() != plan.total {
         return Err(AppError::Integrity(
             "plan.tsv assigned counts do not add up to split.meta total".to_owned(),
@@ -530,6 +572,54 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         AcquisitionStage::PublishedShardIndex,
     )?;
     let shard_names = directory_entries(&shard_index, true)?;
+    if let Some((source_summary, source_link)) = &source
+        && plan.total == 0
+    {
+        if plan.parallelism != 0
+            || !planned_shards.is_empty()
+            || !shard_names.is_empty()
+            || !plan_table.is_empty()
+            || !failed_list.trim().is_empty()
+        {
+            return Err(AppError::Integrity(
+                "zero-case rerun has shard or failure evidence".to_owned(),
+            ));
+        }
+        if !plan.carry_forward {
+            return Err(AppError::Unavailable("zero-case rerun changed or removed source cases; no carried-forward verdict can be established".to_owned()));
+        }
+        let verdict = verdict.trim();
+        if verdict != source_summary.verdict
+            || !(request.ci_state.eq_ignore_ascii_case("unreported")
+                || request
+                    .ci_state
+                    .eq_ignore_ascii_case(&source_summary.ci_state))
+        {
+            return Err(AppError::Integrity(
+                "carried-forward status and verdict disagree with the validated source suite"
+                    .to_owned(),
+            ));
+        }
+        let summary = SuiteSummary {
+            schema_version: 3,
+            suite: request.suite.job_name().to_owned(),
+            ci_state: source_summary.ci_state.clone(),
+            collection_state: "complete".to_owned(),
+            run_id: request.run_id,
+            attempt: request.attempt,
+            artifact_base: artifact_base.to_string(),
+            verdict: verdict.to_owned(),
+            counts: TestCounts::default(),
+            shards: Vec::new(),
+            failures: Vec::new(),
+            commit: Some(request.commit.to_owned()),
+            rerun: Some(RerunSource {
+                mode: "carried_forward".to_owned(),
+                ..source_link.clone()
+            }),
+        };
+        return publish_summary(&request, &provider_raw, &suite_dir, summary, Vec::new());
+    }
     if shard_names.is_empty() {
         return job_level_failure(
             format!("terminal {} suite has no shard directories", request.suite),
@@ -1073,7 +1163,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     }
 
     let summary = SuiteSummary {
-        schema_version: 2,
+        schema_version: if source.is_some() { 3 } else { 2 },
         suite: request.suite.job_name().to_owned(),
         ci_state: if unreported {
             if verdict == "pass" {
@@ -1093,10 +1183,39 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         counts,
         shards,
         failures,
+        commit: source.as_ref().map(|_| request.commit.to_owned()),
+        rerun: source.map(|(_, link)| link),
     };
+    publish_summary(&request, &provider_raw, &suite_dir, summary, binary_records)
+}
+
+fn publish_summary(
+    request: &SuiteRequest<'_>,
+    provider_raw: &Path,
+    suite_dir: &Path,
+    summary: SuiteSummary,
+    binary_records: Vec<BinaryRecord>,
+) -> Result<SuiteSummary, AppError> {
+    if !request.lineage.is_empty() {
+        let current: ActionRun = serde_json::from_slice(&gh_output(&format!(
+            "repos/CUBRID/cubrid/actions/runs/{}",
+            request.run_id
+        ))?)?;
+        let pinned: ActionRun = serde_json::from_slice(request.run_json)?;
+        if current.id != request.run_id
+            || current.run_attempt != request.attempt
+            || current.status.as_deref() != Some("completed")
+            || current.updated_at != pinned.updated_at
+        {
+            return Err(AppError::Unavailable(
+                "source execution changed while its evidence was being collected".to_owned(),
+            ));
+        }
+    }
     let summary_bytes = serde_json::to_vec_pretty(&summary)?;
+    validate_summary_schema(&summary_bytes)?;
     write_raw_index(
-        &provider_raw,
+        provider_raw,
         request.run_id,
         request.attempt,
         request.suite.job_name(),
@@ -1111,8 +1230,201 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             },
         )?;
     }
-    write_json_immutable(&summary_path, &summary)?;
+    write_json_immutable(&suite_dir.join("summary.json"), &summary)?;
     Ok(summary)
+}
+
+fn validate_summary_schema(bytes: &[u8]) -> Result<(), AppError> {
+    let value: serde_json::Value = serde_json::from_slice(bytes)?;
+    let (name, schema) = if value["schema_version"] == 3 {
+        (
+            "suite-summary-v3",
+            include_str!("../schema/suite-summary-v3.schema.json"),
+        )
+    } else {
+        (
+            "suite-summary-v2",
+            include_str!("../schema/suite-summary-v2.schema.json"),
+        )
+    };
+    validate_json_schema(name, schema, bytes)
+}
+
+fn rerun_source_run(
+    context: &RunContext,
+    plan: &SqlPlan,
+    raw: &Path,
+) -> Result<Option<u64>, AppError> {
+    let log = if let Some(log) = &context.collect_log {
+        String::from_utf8_lossy(log).into_owned()
+    } else if plan.rerun_since.is_some() {
+        let job = context
+            .jobs
+            .iter()
+            .find(|job| job.name == "collect")
+            .ok_or_else(|| {
+                AppError::Unavailable("rerun source requires a collect-job log".to_owned())
+            })?;
+        let retained = raw.join("github/collect.log");
+        if retained.exists() {
+            read_bounded_text(&retained, MAX_GITHUB_LOG_BYTES)?
+        } else {
+            let output = gh_job_log(&format!("repos/CUBRID/cubrid/actions/jobs/{}/logs", job.id))?;
+            let log = sanitize_log(&String::from_utf8_lossy(&output));
+            write_string_immutable(&retained, &log)?;
+            log
+        }
+    } else {
+        return Ok(None);
+    };
+    // Read the concrete step environment, not shell commands or rendered Markdown.
+    let pattern =
+        Regex::new(r"(?m)^(?:[0-9T:.\-]+Z[ \t]+)?[ \t]*RERUN_FROM:[ \t]*([0-9]*)[ \t]*\r?$")
+            .expect("valid rerun source regex");
+    let mut sources = BTreeSet::new();
+    for capture in pattern.captures_iter(&log) {
+        if !capture[1].is_empty() {
+            let source: u64 = capture[1]
+                .parse()
+                .map_err(|_| AppError::Malformed("invalid RERUN_FROM run ID".to_owned()))?;
+            if source == 0 {
+                return Err(AppError::Malformed(
+                    "RERUN_FROM must identify a positive run ID".to_owned(),
+                ));
+            }
+            sources.insert(source);
+        }
+    }
+    if sources.len() > 1 {
+        return Err(AppError::Integrity(
+            "collect-job log has conflicting RERUN_FROM values".to_owned(),
+        ));
+    }
+    let source = sources.into_iter().next();
+    if plan.rerun_since.is_some() && source.is_none() {
+        return Err(AppError::Unavailable(
+            "rerun plan has no concrete RERUN_FROM in the collect-job environment".to_owned(),
+        ));
+    }
+    Ok(source)
+}
+
+async fn collect_rerun_source(
+    request: &SuiteRequest<'_>,
+    source_run: u64,
+    raw: &Path,
+) -> Result<(SuiteSummary, RerunSource), AppError> {
+    if source_run == request.run_id || request.lineage.contains(&source_run) {
+        return Err(AppError::Integrity(
+            "rerun source lineage is cyclic".to_owned(),
+        ));
+    }
+    let metadata = raw.join("github/rerun-source.json");
+    let bytes = if metadata.exists() {
+        fs::read(&metadata).map_err(|source| AppError::storage(&metadata, source))?
+    } else {
+        let bytes = gh_output(&format!("repos/CUBRID/cubrid/actions/runs/{source_run}"))?;
+        write_string_immutable(&metadata, &String::from_utf8_lossy(&bytes))?;
+        bytes
+    };
+    let source: ActionRun = serde_json::from_slice(&bytes)?;
+    let current: ActionRun = serde_json::from_slice(request.run_json)?;
+    if source.id != source_run || source.run_attempt == 0 {
+        return Err(AppError::Integrity(
+            "rerun source metadata has inconsistent execution identity".to_owned(),
+        ));
+    }
+    match (source.updated_at, current.created_at) {
+        (Some(finished), Some(started)) if source.status.as_deref() == Some("completed") && finished <= started => {}
+        _ => return Err(AppError::Unavailable("source run is unfinished, was updated after the rerun started, or lacks timestamps; its source attempt cannot be established".to_owned())),
+    }
+    let mut lineage = request.lineage.to_vec();
+    lineage.push(request.run_id);
+    let source_context = Mutex::new(None);
+    let acquisition = AcquisitionLedger::default();
+    let mut binary_bytes_remaining = 0;
+    let mut binary_consumption = Vec::new();
+    let summary = Box::pin(collect_suite(SuiteRequest {
+        suite: request.suite,
+        run_id: source_run,
+        attempt: source.run_attempt,
+        commit: request.commit,
+        ci_state: "unreported",
+        artifact_base: request.artifact_base,
+        evidence_dir: request.evidence_dir,
+        status_snapshot_json: request.status_snapshot_json,
+        run_json: &bytes,
+        run_context: &source_context,
+        lineage: &lineage,
+        fetch_permits: request.fetch_permits,
+        fetch_concurrency: request.fetch_concurrency,
+        acquisition: &acquisition,
+        include_binaries: false,
+        max_binary_bytes: request.max_binary_bytes,
+        binary_bytes_remaining: &mut binary_bytes_remaining,
+        binary_consumption: &mut binary_consumption,
+    }))
+    .await?;
+    let relative = PathBuf::from(format!(
+        "providers/github-actions/runs/{source_run}/attempts/{}/{}/summary.json",
+        source.run_attempt,
+        request.suite.job_name()
+    ));
+    let summary_bytes = fs::read(request.evidence_dir.join(&relative))
+        .map_err(|source| AppError::storage(&relative, source))?;
+    let plan = parse_split_meta(&read_bounded_text(
+        &raw.join("plan/split.meta"),
+        MAX_INDEX_BYTES,
+    )?)?;
+    let source_plan = parse_split_meta(&read_bounded_text(
+        &request
+            .evidence_dir
+            .join(&relative)
+            .parent()
+            .unwrap()
+            .join("raw/plan/split.meta"),
+        MAX_INDEX_BYTES,
+    )?)?;
+    if plan.engine_sha.as_deref() != Some(request.commit)
+        || plan.rerun_since.as_deref() != Some(source_plan.testcase_sha.as_str())
+    {
+        return Err(AppError::Integrity(
+            "rerun plan Engine SHA or source testcase revision disagrees with the validated source"
+                .to_owned(),
+        ));
+    }
+    Ok((
+        summary,
+        RerunSource {
+            mode: "partial".to_owned(),
+            run_id: source_run,
+            attempt: source.run_attempt,
+            summary: relative,
+            summary_sha256: hex::encode(Sha256::digest(&summary_bytes)),
+        },
+    ))
+}
+
+async fn validate_rerun_source(
+    request: &SuiteRequest<'_>,
+    source: &RerunSource,
+) -> Result<(), AppError> {
+    let raw = request.evidence_dir.join(format!(
+        "providers/github-actions/runs/{}/attempts/{}/{}/raw",
+        request.run_id,
+        request.attempt,
+        request.suite.job_name()
+    ));
+    let (_, expected) = collect_rerun_source(request, source.run_id, &raw).await?;
+    if source.attempt != expected.attempt
+        || source.summary != expected.summary
+        || source.summary_sha256 != expected.summary_sha256
+    {
+        return Err(AppError::Integrity(
+            "stored rerun source reference disagrees with its validated source summary".to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 async fn collect_abnormal_shard_binaries(
@@ -2071,6 +2383,9 @@ struct SqlPlan {
     parallelism: u64,
     testcase_sha: String,
     testcase_branch: String,
+    engine_sha: Option<String>,
+    rerun_since: Option<String>,
+    carry_forward: bool,
 }
 
 fn parse_split_meta(value: &str) -> Result<SqlPlan, AppError> {
@@ -2104,6 +2419,23 @@ fn parse_split_meta(value: &str) -> Result<SqlPlan, AppError> {
         parallelism,
         testcase_sha: testcase_sha.to_owned(),
         testcase_branch: testcase_branch.to_owned(),
+        engine_sha: fields
+            .get("sha")
+            .map(|value| value.trim_matches('\'').to_owned()),
+        rerun_since: fields
+            .get("rerun_since")
+            .map(|value| value.trim_matches('\''))
+            .filter(|value| !value.is_empty())
+            .map(ToOwned::to_owned),
+        carry_forward: [
+            "rerun_unrun",
+            "rerun_short",
+            "rerun_gone",
+            "rerun_failed",
+            "rerun_changed",
+        ]
+        .iter()
+        .all(|name| fields.get(name).is_some_and(|value| *value == "0")),
     })
 }
 
@@ -2512,6 +2844,12 @@ struct ActionJob {
 struct ActionRun {
     id: u64,
     run_attempt: u64,
+    #[serde(default)]
+    created_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    #[serde(default)]
+    status: Option<String>,
 }
 
 #[cfg(test)]

@@ -1,0 +1,76 @@
+{
+  "jobs": [
+    {
+      "id": 121612002971,
+      "name": "gate",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612005878,
+      "name": "nightly batch",
+      "run_attempt": 1,
+      "conclusion": "skipped"
+    },
+    {
+      "id": 121612092671,
+      "name": "status (pending)",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612092814,
+      "name": "build (release)",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612092990,
+      "name": "build (debug)",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612448463,
+      "name": "plan",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612448597,
+      "name": "build status",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121612848221,
+      "name": "shard shell 00",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121614144713,
+      "name": "collect",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121614465976,
+      "name": "status shell",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121614465983,
+      "name": "status medium",
+      "run_attempt": 1,
+      "conclusion": "success"
+    },
+    {
+      "id": 121614466043,
+      "name": "status sql",
+      "run_attempt": 1,
+      "conclusion": "success"
+    }
+  ]
+}

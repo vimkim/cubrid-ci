@@ -1,0 +1,2 @@
+<testsuite tests="1"><testcase classname="linux_sql_64bit_debug" name="sql/_02_user_authorization/_02_authorization/_001_grant/cases/1001.sql" file="cubrid-testcases/sql/_02_user_authorization/_02_authorization/_001_grant/cases/1001.sql" time="0.052" />
+    </testsuite>

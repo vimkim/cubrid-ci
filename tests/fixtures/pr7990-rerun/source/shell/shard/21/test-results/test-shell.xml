@@ -1,0 +1,1102 @@
+<testsuite tests="1" failures="1"><testcase classname="https://github.com/CUBRID/cubrid-testcases-private-ex/blob/develop/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" name="shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" file="cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.sh" time="30.402">
+      <failure message="Test failed" type="TestFailure">
+EnvIdentify: EnvId=local[parallel-21]
+Hostname: cubrid-arc-586zc-runner-zzfcz-workflow
+syntax-1 : OK
+syntax-2 : OK
+syntax-3 : NOK
+diff load3.answer load3.log failed
+Start schema loading.						Start schema loading.
+Total        7 statements executed.				Total        7 statements executed.
+Schema loading from tdb_schema finished.			Schema loading from tdb_schema finished.
+Statistics for Catalog classes have been updated.		Statistics for Catalog classes have been updated.
+Start object loading.						Start object loading.
+Line 99:Missing attribute values.  Expected 2, found 1.		Line 99:Missing attribute values.  Expected 2, found 1.
+line 99: syntax error at "abc97"			      |	Total 0 object(s) inserted, 1 object(s) failed.
+Total 0 object(s) inserted, 2 object(s) failed.		      &lt;
+syntax-4 : OK
+syntax-5 : OK
+syntax-6 : OK
+syntax-7 : OK
+22:14:40----/home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases--- time=30
+============================= CONSOLE OUTPUT =============================
+++ begin_time=0
+++ end_time=0
+++ need_count_time=1
+++ cubrid_major=
+++ cubrid_minor=
+++ IGNORE_TEST_PERFORMANCE=
+++ '[' '!' -n en_US ']'
++++ get_os
+++++ uname
++++ osname=Linux
++++ case "$osname" in
++++ echo Linux
+++ export OS=Linux
+++ OS=Linux
+++ '[' Linux = Windows_NT ']'
+++ source /home/cubrid-testtools/CTP/shell/init_path/shell_utils.sh
++ init test
+++ date
++ echo '[INFO] TEST START (Mon Oct 26 22:14:10 KST 2026)'
+[INFO] TEST START (Mon Oct 26 22:14:10 KST 2026)
+++ pwd
++ cur_path=/home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases
++ cd /home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases
++ case_no=1
++ full_name=syntax.sh
++ answer_no=1
++ mode=test
++ '[' 1 -eq 1 ']'
+++ get_curr_second
++++ date +%s
+++ str=1793020450
+++ echo 1793020450
++ begin_time=1793020450
+++ date +%Y-%m-%d
++ date_str=2026-10-26
+++ date +%H:%M:%S
++ time_str=22:14:10
++ echo 22:14:10----/home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases---- test start
+/home/cubrid-testtools/CTP/shell/init_path/init.sh: line 768: /home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/: Is a directory
++ '[' Linux = Windows_NT ']'
++ export REAL_INIT_PATH=/home/cubrid-testtools/CTP/shell/init_path
++ REAL_INIT_PATH=/home/cubrid-testtools/CTP/shell/init_path
+++ cubrid_rel
+++ grep 32bit
+++ wc -l
++ is_cubrid_32bits=0
++ '[' 0 == 1 ']'
++ CUBRID_BITS=64
++ export CUBRID_BITS
++ rm -rf /home/CUBRID/log/manager /home/CUBRID/log/pl /home/CUBRID/log/server
++ '[' Linux = AIX ']'
++ objext=_objects
++ schext=_schema
++ idxext=_indexes
++ trgext=_trigger
++ PATH=/home/cubrid-testtools/CTP/shell/init_path/../../bin:/home/cubrid-testtools/CTP/shell/init_path/../../common/script:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/home/CUBRID/bin:/usr/sbin:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/bin
++ '[' Linux = Windows_NT ']'
++ CLASSPATH=/home/CUBRID/jdbc/cubrid_jdbc.jar:/home/cubrid-testtools/CTP/shell/init_path/commonforjdbc.jar:.
++ LD_LIBRARY_PATH=/home/cubrid-testtools/CTP/shell/init_path/commonforc/lib:/home/CUBRID/lib:/home/CUBRID/cci/lib:
++ rm '/home/CUBRID/log/server/*.err'
++ cubrid service stop
+++ cubrid service is not running.
++ pkill cub
++ chmod u+x /home/cubrid-testtools/CTP/shell/init_path/cubrid
++ PATH=/home/cubrid-testtools/CTP/shell/init_path:/usr/lib/jvm/java-1.8.0/bin:/home/cubrid-testtools/CTP/shell/init_path/../../bin:/home/cubrid-testtools/CTP/shell/init_path/../../common/script:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/home/CUBRID/bin:/usr/sbin:/home/cubrid-testtools/CTP/bin:/home/cubrid-testtools/CTP/common/script:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin:/root/bin
++ export PATH
++ export CLASSPATH
++ export LD_LIBRARY_PATH
++ export LIBRARY_PATH
+++ ini.sh -s %BROKER1 /home/CUBRID/conf/cubrid_broker.conf SERVICE
+++ grep -iw ON
+++ grep -v grep
+++ wc -l
++ isAvailableServiceForBroker1=1
++ '[' 1 -ne 0 ']'
+++ ini.sh -s %BROKER1 /home/CUBRID/conf/cubrid_broker.conf BROKER_PORT
++ broker_port=13091
++ sed -i 's@&lt;port&gt;[0-9]*&lt;/port&gt;@&lt;port&gt;13091&lt;/port&gt;@g' /home/cubrid-testtools/CTP/shell/init_path/shell_config.xml
++ '[' test = test ']'
++ run_mode=1
+++ echo syntax
++ case_name=syntax
++ result_file=syntax.result
++ '[' -f syntax.tar ']'
++ '[' 1 -eq 1 ']'
++ '[' -f syntax.result ']'
++ rm syntax.result
++ touch syntax.result
++ export OS
++ cubrid deletedb db1
+Database "db1" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db1
++ mkdir db1
++ cd db1
++ cubrid_createdb db1 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db1 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db1
+@ cubrid master start
+++ cubrid master start: success
+@ cubrid server start: db1
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s tdb_schema -d objects1 -i tdb_indexes db1
++ compare_result_between_files load1.answer load1.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load1.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load1.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load1.answer*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load1.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load1.answer ']'
+++ newfilename=load1.answer
+++ echo load1.answer
+++ return 1
++ left=load1.answer
+++ get_best_compat_file load1.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load1.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+++ ls -l 'load1.log*_D*'
+ls: cannot access 'load1.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load1.log ']'
+++ newfilename=load1.log
+++ echo load1.log
+++ return 1
++ right=load1.log
++ '[' load1.answer == '' ']'
++ '[' load1.log == '' ']'
++ dos2unix load1.answer
+dos2unix: converting file load1.answer to Unix format...
++ dos2unix load1.log
+dos2unix: converting file load1.log to Unix format...
++ echo 'start to compare files: diff load1.answer load1.log'
+start to compare files: diff load1.answer load1.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load1.answer load1.log -b
++ local f1=load1.answer
++ local f2=load1.log
++ local op=-b
++ local tmp1=load1.answer_temp_diff
++ local tmp2=load1.log_temp_diff
++ cp -f load1.answer load1.answer_temp_diff
++ cp -f load1.log load1.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load1.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load1.log_temp_diff
++ diff load1.answer_temp_diff load1.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 1 : OK'
+----------------- 1 : OK
++ echo 'syntax-1 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db1
+@ cubrid server stop: db1
+
+Server db1 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db1
++ cubrid deletedb db2
+Database "db2" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db2
++ mkdir db2
++ cd db2
++ cubrid_createdb db2 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db2 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db2
+@ cubrid server start: db2
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s tdb_schema -d objects2 -i tdb_indexes db2
++ compare_result_between_files load2.answer load2.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load2.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load2.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load2.answer*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load2.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load2.answer ']'
+++ newfilename=load2.answer
+++ echo load2.answer
+++ return 1
++ left=load2.answer
+++ get_best_compat_file load2.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load2.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load2.log*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load2.log*_D*': No such file or directory
++++ wc -l
++++ cat listdrv
+++ '[' 0 -eq 0 ']'
+++ '[' -f load2.log ']'
+++ newfilename=load2.log
+++ echo load2.log
+++ return 1
++ right=load2.log
++ '[' load2.answer == '' ']'
++ '[' load2.log == '' ']'
++ dos2unix load2.answer
+dos2unix: converting file load2.answer to Unix format...
++ dos2unix load2.log
+dos2unix: converting file load2.log to Unix format...
++ echo 'start to compare files: diff load2.answer load2.log'
+start to compare files: diff load2.answer load2.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load2.answer load2.log -b
++ local f1=load2.answer
++ local f2=load2.log
++ local op=-b
++ local tmp1=load2.answer_temp_diff
++ local tmp2=load2.log_temp_diff
++ cp -f load2.answer load2.answer_temp_diff
++ cp -f load2.log load2.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load2.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load2.log_temp_diff
++ diff load2.answer_temp_diff load2.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 2 : OK'
+----------------- 2 : OK
++ echo 'syntax-2 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db2
+@ cubrid server stop: db2
+
+Server db2 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db2
++ cubrid deletedb db3
+Database "db3" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db3
++ mkdir db3
++ cd db3
++ cubrid_createdb db3 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db3 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db3
+@ cubrid server start: db3
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s tdb_schema -d objects3 -i tdb_indexes db3
++ compare_result_between_files load3.answer load3.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load3.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load3.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load3.answer*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load3.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load3.answer ']'
+++ newfilename=load3.answer
+++ echo load3.answer
+++ return 1
++ left=load3.answer
+++ get_best_compat_file load3.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load3.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load3.log*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load3.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load3.log ']'
+++ newfilename=load3.log
+++ echo load3.log
+++ return 1
++ right=load3.log
++ '[' load3.answer == '' ']'
++ '[' load3.log == '' ']'
++ dos2unix load3.answer
+dos2unix: converting file load3.answer to Unix format...
++ dos2unix load3.log
+dos2unix: converting file load3.log to Unix format...
++ echo 'start to compare files: diff load3.answer load3.log'
+start to compare files: diff load3.answer load3.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load3.answer load3.log -b
++ local f1=load3.answer
++ local f2=load3.log
++ local op=-b
++ local tmp1=load3.answer_temp_diff
++ local tmp2=load3.log_temp_diff
++ cp -f load3.answer load3.answer_temp_diff
++ cp -f load3.log load3.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load3.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load3.log_temp_diff
++ diff load3.answer_temp_diff load3.log_temp_diff -b
+10,11c10
+&lt; line 99: syntax error at "abc97"
+&lt; Total 0 object(s) inserted, 2 object(s) failed.
+---
+&gt; Total 0 object(s) inserted, 1 object(s) failed.
++ write_nok
++ '[' -z '' ']'
++ echo '----------------- 3 : NOK'
+----------------- 3 : NOK
++ echo 'syntax-3 : NOK'
+++ grep 'Internal Error' /home/CUBRID/log/server/db1_20261026_2214.err /home/CUBRID/log/server/db1_latest.err /home/CUBRID/log/server/db2_20261026_2214.err /home/CUBRID/log/server/db2_latest.err /home/CUBRID/log/server/db3_20261026_2214.err /home/CUBRID/log/server/db3_latest.err
+++ wc -l
++ internal_err=0
++ '[' 0 -gt 0 ']'
++ let 'case_no = case_no + 1'
++ echo 'diff load3.answer load3.log failed'
++ diff_ignore_lineno load3.answer load3.log -y
++ local f1=load3.answer
++ local f2=load3.log
++ local op=-y
++ local tmp1=load3.answer_temp_diff
++ local tmp2=load3.log_temp_diff
++ cp -f load3.answer load3.answer_temp_diff
++ tee -a /home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases/syntax.result
++ cp -f load3.log load3.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load3.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load3.log_temp_diff
++ diff load3.answer_temp_diff load3.log_temp_diff -y
+
+Start schema loading.						Start schema loading.
+Total        7 statements executed.				Total        7 statements executed.
+Schema loading from tdb_schema finished.			Schema loading from tdb_schema finished.
+Statistics for Catalog classes have been updated.		Statistics for Catalog classes have been updated.
+
+
+Start object loading.						Start object loading.
+Line 99:Missing attribute values.  Expected 2, found 1.		Line 99:Missing attribute values.  Expected 2, found 1.
+line 99: syntax error at "abc97"			      |	Total 0 object(s) inserted, 1 object(s) failed.
+Total 0 object(s) inserted, 2 object(s) failed.		      &lt;
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db3
+@ cubrid server stop: db3
+
+Server db3 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db3
++ cubrid deletedb db4
+Database "db4" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db4
++ mkdir db4
++ cd db4
++ cubrid_createdb db4 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db4 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db4
+@ cubrid server start: db4
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s schema1 -d tdb_objects -i tdb_indexes db4
++ compare_result_between_files load4.answer load4.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load4.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load4.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ ls -l 'load4.answer*_D*'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load4.answer*_D*': No such file or directory
++++ wc -l
++++ cat listdrv
+++ '[' 0 -eq 0 ']'
+++ '[' -f load4.answer ']'
+++ newfilename=load4.answer
+++ echo load4.answer
+++ return 1
++ left=load4.answer
+++ get_best_compat_file load4.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load4.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+++ ls -l 'load4.log*_D*'
+ls: cannot access 'load4.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load4.log ']'
+++ newfilename=load4.log
+++ echo load4.log
+++ return 1
++ right=load4.log
++ '[' load4.answer == '' ']'
++ '[' load4.log == '' ']'
++ dos2unix load4.answer
+dos2unix: converting file load4.answer to Unix format...
++ dos2unix load4.log
+dos2unix: converting file load4.log to Unix format...
++ echo 'start to compare files: diff load4.answer load4.log'
+start to compare files: diff load4.answer load4.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load4.answer load4.log -b
++ local f1=load4.answer
++ local f2=load4.log
++ local op=-b
++ local tmp1=load4.answer_temp_diff
++ local tmp2=load4.log_temp_diff
++ cp -f load4.answer load4.answer_temp_diff
++ cp -f load4.log load4.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load4.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load4.log_temp_diff
++ diff load4.answer_temp_diff load4.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 4 : OK'
+----------------- 4 : OK
++ echo 'syntax-4 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db4
+@ cubrid server stop: db4
+
+Server db4 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db4
++ cubrid deletedb db5
+Database "db5" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db5
++ mkdir db5
++ cd db5
++ cubrid_createdb db5 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ awk -F '(' '{print $2}'
+++ grep CUBRID
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ awk -F . '{print $2}'
+++ echo 11.5.0.2769-52987c6
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db5 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db5
+@ cubrid server start: db5
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s schema2 -d tdb_objects -i tdb_indexes db5
++ compare_result_between_files load5.answer load5.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load5.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load5.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load5.answer*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load5.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load5.answer ']'
+++ newfilename=load5.answer
+++ echo load5.answer
+++ return 1
++ left=load5.answer
+++ get_best_compat_file load5.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load5.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load5.log*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load5.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load5.log ']'
+++ newfilename=load5.log
+++ echo load5.log
+++ return 1
++ right=load5.log
++ '[' load5.answer == '' ']'
++ '[' load5.log == '' ']'
++ dos2unix load5.answer
+dos2unix: converting file load5.answer to Unix format...
++ dos2unix load5.log
+dos2unix: converting file load5.log to Unix format...
++ echo 'start to compare files: diff load5.answer load5.log'
+start to compare files: diff load5.answer load5.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load5.answer load5.log -b
++ local f1=load5.answer
++ local f2=load5.log
++ local op=-b
++ local tmp1=load5.answer_temp_diff
++ local tmp2=load5.log_temp_diff
++ cp -f load5.answer load5.answer_temp_diff
++ cp -f load5.log load5.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load5.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load5.log_temp_diff
++ diff load5.answer_temp_diff load5.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 5 : OK'
+----------------- 5 : OK
++ echo 'syntax-5 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db5
+@ cubrid server stop: db5
+
+Server db5 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db5
++ cubrid deletedb db6
+Database "db6" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db6
++ mkdir db6
++ cd db6
++ cubrid_createdb db6 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ awk -F . '{print $2}'
+++ echo 11.5.0.2769-52987c6
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db6 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db6
+@ cubrid server start: db6
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s tdb_schema -d tdb_objects -i indexes1 db6
++ compare_result_between_files load6.answer load6.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load6.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load6.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load6.answer*_D*'
+++ grep -E '_D[0-9\.]+'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load6.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load6.answer ']'
+++ newfilename=load6.answer
+++ echo load6.answer
+++ return 1
++ left=load6.answer
+++ get_best_compat_file load6.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load6.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ ls -l 'load6.log*_D*'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load6.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load6.log ']'
+++ newfilename=load6.log
+++ echo load6.log
+++ return 1
++ right=load6.log
++ '[' load6.answer == '' ']'
++ '[' load6.log == '' ']'
++ dos2unix load6.answer
+dos2unix: converting file load6.answer to Unix format...
++ dos2unix load6.log
+dos2unix: converting file load6.log to Unix format...
++ echo 'start to compare files: diff load6.answer load6.log'
+start to compare files: diff load6.answer load6.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load6.answer load6.log -b
++ local f1=load6.answer
++ local f2=load6.log
++ local op=-b
++ local tmp1=load6.answer_temp_diff
++ local tmp2=load6.log_temp_diff
++ cp -f load6.answer load6.answer_temp_diff
++ cp -f load6.log load6.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load6.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load6.log_temp_diff
++ diff load6.answer_temp_diff load6.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 6 : OK'
+----------------- 6 : OK
++ echo 'syntax-6 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db6
+@ cubrid server stop: db6
+
+Server db6 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db6
++ cubrid deletedb db7
+Database "db7" is unknown, or the file "databases.txt" cannot be accessed.
++ rm -rf db7
++ mkdir db7
++ cd db7
++ cubrid_createdb db7 --db-volume-size=64M --log-volume-size=20M
++ parse_build_version
+++ cubrid_rel
+++ grep CUBRID
+++ awk -F '(' '{print $2}'
+++ sed 's/)//g'
++ build_ver='11.5.0.2769-52987c6 '
++ cubrid_major=11
+++ echo 11.5.0.2769-52987c6
+++ awk -F . '{print $2}'
++ cubrid_minor=5
+++ cubrid_rel
+++ grep debug
+++ wc -l
++ isDebug=1
++ '[' 1 -eq 1 ']'
++ IGNORE_TEST_PERFORMANCE=TRUE
++ '[' 11 -ge 9 -a 5 -gt 1 ']'
++ cubrid createdb db7 --db-volume-size=64M --log-volume-size=20M en_US
+Creating database with 64.0M size using locale en_US. The total amount of disk space needed is 104.0M.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
++ cd ..
++ cubrid server start db7
+@ cubrid server start: db7
+
+This may take a long time depending on the amount of recovery works to do.
+
+CUBRID 11.5.0 (11.5.0.2769) (64 optdebug build)
+
+++ cubrid server start: success
++ cubrid loaddb --no-user-specified-name -udba -C -s xdb_schema -d xdb_objects -i xdb_indexes --trigger-file=xdb_trigger db7
++ compare_result_between_files load7.answer load7.log
++ cci_driver=
++ server=
++ '[' 2 -lt 2 ']'
++ '[' -f /home/CUBRID/qa.conf ']'
+++ get_best_compat_file load7.answer
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load7.answer
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ grep -E '_D[0-9\.]+'
+++ ls -l 'load7.answer*_D*'
+++ awk -F _D '{print $NF}'
+ls: cannot access 'load7.answer*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load7.answer ']'
+++ newfilename=load7.answer
+++ echo load7.answer
+++ return 1
++ left=load7.answer
+++ get_best_compat_file load7.log
+++ suffix_os=
+++ best_driver=
+++ best_server=
+++ fileName=load7.log
+++ current_server=
+++ cci_driver=
+++ newfilename=
+++ '[' Linux = Windows_NT ']'
+++ '[' Linux = AIX ']'
+++ ls -l 'load7.log*_D*'
+++ awk -F _D '{print $NF}'
+++ grep -E '_D[0-9\.]+'
+ls: cannot access 'load7.log*_D*': No such file or directory
++++ cat listdrv
++++ wc -l
+++ '[' 0 -eq 0 ']'
+++ '[' -f load7.log ']'
+++ newfilename=load7.log
+++ echo load7.log
+++ return 1
++ right=load7.log
++ '[' load7.answer == '' ']'
++ '[' load7.log == '' ']'
++ dos2unix load7.answer
+dos2unix: converting file load7.answer to Unix format...
++ dos2unix load7.log
+dos2unix: converting file load7.log to Unix format...
++ echo 'start to compare files: diff load7.answer load7.log'
+start to compare files: diff load7.answer load7.log
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ '[' '' = error ']'
++ '[' '' = sort ']'
++ diff_ignore_lineno load7.answer load7.log -b
++ local f1=load7.answer
++ local f2=load7.log
++ local op=-b
++ local tmp1=load7.answer_temp_diff
++ local tmp2=load7.log_temp_diff
++ cp -f load7.answer load7.answer_temp_diff
++ cp -f load7.log load7.log_temp_diff
++ mask_exprs=(-e "s/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g" -e "s/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g" -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e "s/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e "s/In the command from line[ 0-9]*/In the command from line ?/g" -e "s/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g" -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e "s/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g" -e "s/In schema[0-9]* line [0-9]*/In schema? line ?/g" -e "s/In indexes[0-9]* line [0-9]*/In indexes? line ?/g")
++ local -a mask_exprs
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load7.answer_temp_diff
++ LC_ALL=C
++ sed -i -e 's/Command in Line[[:space:]]*[0-9][0-9]*/Command in Line ?/g' -e 's/의[[:space:]]*결과,[[:space:]]*명령어[[:space:]]*라인[[:space:]]*[0-9][0-9]*/의 결과, 명령어 라인 ?/g' -e 's/��[[:space:]]*���,[[:space:]]*��ɾ�[[:space:]]*����[[:space:]]*[0-9][0-9]*/�� ���, ��ɾ� ���� ?/g' -e 's/In[\t ]*line[\t 0-9]*,[\t ]*column[\t 0-9]*/In      line    ?,      column  ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,[[:space:]]*열[[:space:]]*[0-9][0-9]*,/라인 ?, 열 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,[[:space:]]*��[[:space:]]*[0-9][0-9]*,/���� ?, �� ?,/g' -e 's/In the command from line[ 0-9]*/In the command from line ?/g' -e 's/라인[[:space:]]*[0-9][0-9]*,/라인 ?,/g' -e 's/����[[:space:]]*[0-9][0-9]*,/���� ?,/g' -e 's/Commit transaction at line[ 0-9]*/Commit transaction at line ?/g' -e 's/In schema[0-9]* line [0-9]*/In schema? line ?/g' -e 's/In indexes[0-9]* line [0-9]*/In indexes? line ?/g' load7.log_temp_diff
++ diff load7.answer_temp_diff load7.log_temp_diff -b
++ write_ok
++ '[' -z '' ']'
++ echo '----------------- 7 : OK'
+----------------- 7 : OK
++ echo 'syntax-7 : OK'
++ let 'case_no = case_no + 1'
++ let 'answer_no = answer_no + 1'
++ cubrid server stop db7
+@ cubrid server stop: db7
+
+Server db7 notified of shutdown.
+This may take several minutes. Please wait.
+++ cubrid server stop: success
++ cubrid deletedb db7
++ finish
++ rm -f 'userver.err.*'
++ rm -f 'uclient.err.*'
++ rm -f 'client.err.*'
++ rm -rf ./lob
++ cubrid service stop
+@ cubrid broker stop
+++ cubrid broker is not running.
+@ cubrid manager server stop
+++ cubrid manager server is not running.
+@ cubrid master stop
+++ cubrid master stop: success
++ pkill cub
++ '[' 1 -eq 1 ']'
++ count_time
+++ get_curr_second
++++ date +%s
+++ str=1793020480
+++ echo 1793020480
++ end_time=1793020480
++ duration=30
+++ date +%Y-%m-%d
++ date_str=2026-10-26
+++ date +%H:%M:%S
++ time_str=22:14:40
++ echo 22:14:40----/home/cubrid-testcases-private-ex/shell/_35_cherry/issue_21654_server_side_loaddb/syntax/cases--- time=30
++ '[' 30 -gt 7200 ']'
++ '[' 30 -gt 3600 ']'
++ '[' 30 -gt 1800 ']'
++ '[' 30 -gt 600 ']'
++ release_broker_sharedmemory
++ '[' Linux == Linux -o Linux == AIX ']'
+++ ipcs
+++ grep root
+++ awk '{print $2}'
++ broker_sid=
++ '[' -n '' ']'
++ delete_ini
++ '[' Linux = Windows_NT ']'
++ cp /home/CUBRID/conf/cubrid.conf.org /home/CUBRID/conf/cubrid.conf
+cp: cannot stat '/home/CUBRID/conf/cubrid.conf.org': No such file or directory
++ restore_all_conf
++ restore_db_conf
++ '[' -f /home/CUBRID/conf/cubrid.conf.org ']'
++ restore_broker_conf
++ '[' -f /home/CUBRID/conf/cubrid_broker.conf.org ']'
++ restore_gateway_conf
++ '[' -f /home/CUBRID/conf/cubrid_gateway.conf.org ']'
++ restore_ha_conf
++ '[' -f /home/CUBRID/conf/cubrid_ha.conf.org ']'
+++ date
++ echo '[INFO] TEST STOP (Mon Oct 26 22:14:40 KST 2026)'
+[INFO] TEST STOP (Mon Oct 26 22:14:40 KST 2026)
+</failure>
+    </testcase>
+    </testsuite>

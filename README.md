@@ -60,6 +60,15 @@ Exit code 1 permits collection only when the shard reports failed testcases.
 Assigned counts, JUnit records, and the failed-case inventory must still agree.
 Other nonzero exit codes remain job-level failures.
 
+`/run rerun <source-run-id>` executions retain their actual selected-case results
+and link to an independently validated source summary. A suite with no selected
+or changed cases carries forward the source verdict with zero newly executed
+cases. Partial rerun counts are not full-suite counts. Collection remains
+incomplete if the source cannot be validated, its attempt is ambiguous, or an
+empty selection changed or removed source cases. These executions use
+[`suite-summary-v3`](schema/suite-summary-v3.schema.json); ordinary executions
+keep suite-summary v2.
+
 Human-readable collection output reports each suite's CI outcome and trusted
 test counts. For example, a red suite may appear as
 `test_shell: FAILURE (3 failed / 3256 executed)` while the collection command
@@ -136,8 +145,9 @@ suite. Commit/base collection stores it under
 `github-actions/CUBRID-cubrid/commits/<sha>` with the same run/attempt layout.
 These new commands emit command/manifest v3 and observation v2, with a commit
 selection and optional baseline relationship instead of a fabricated PR head.
-Existing `collect` retains command/manifest v2 and observation v1. Suite/raw/
-failure schemas remain v2 for both paths. Provider inputs are immutable; `manifest.json` atomically records the
+Existing `collect` retains command/manifest v2 and observation v1. Raw and
+failure schemas remain v2 for both paths; suite summaries use v2 for ordinary
+executions and v3 for reruns. Provider inputs are immutable; `manifest.json` atomically records the
 executions selected by the latest collection. Each validated raw index binds
 its suite summary digest, so a warm summary cannot be reused after either side
 changes. Historical schema-v1 CircleCI bundles remain recognizable but are

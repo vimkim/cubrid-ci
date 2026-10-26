@@ -1,0 +1,11 @@
+{
+  "id": 40323508581,
+  "run_attempt": 1,
+  "head_sha": "4781495f01523a3ecc5891e3377ad62cf876a1cd",
+  "event": "issue_comment",
+  "status": "completed",
+  "conclusion": "failure",
+  "path": ".github/workflows/gha-ci.yml",
+  "created_at": "2026-10-26T12:33:58Z",
+  "updated_at": "2026-10-26T13:18:41Z"
+}

@@ -1,0 +1,222 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/suite-summary-v3.schema.json",
+  "title": "CUBRID CI rerun suite summary v3",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "suite",
+    "ci_state",
+    "collection_state",
+    "run_id",
+    "attempt",
+    "artifact_base",
+    "verdict",
+    "counts",
+    "shards",
+    "failures",
+    "commit",
+    "rerun"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 3
+    },
+    "suite": {
+      "enum": [
+        "test_medium",
+        "test_sql",
+        "test_shell"
+      ]
+    },
+    "ci_state": {
+      "enum": [
+        "success",
+        "failure"
+      ]
+    },
+    "collection_state": {
+      "const": "complete"
+    },
+    "run_id": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "attempt": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "artifact_base": {
+      "type": "string",
+      "format": "uri"
+    },
+    "verdict": {
+      "enum": [
+        "pass",
+        "fail"
+      ]
+    },
+    "counts": {
+      "type": "object",
+      "required": [
+        "planned",
+        "run",
+        "unrun",
+        "tests",
+        "passed",
+        "failures",
+        "errors",
+        "skipped"
+      ],
+      "properties": {
+        "planned": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "run": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "unrun": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "tests": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "passed": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "failures": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "errors": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "skipped": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "additionalProperties": false
+    },
+    "shards": {
+      "type": "array",
+      "minItems": 0,
+      "items": {
+        "type": "object"
+      }
+    },
+    "failures": {
+      "type": "array",
+      "items": {
+        "type": "object"
+      }
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "rerun": {
+      "type": "object",
+      "required": [
+        "mode",
+        "run_id",
+        "attempt",
+        "summary",
+        "summary_sha256"
+      ],
+      "properties": {
+        "mode": {
+          "enum": [
+            "partial",
+            "carried_forward"
+          ]
+        },
+        "run_id": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "attempt": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "summary": {
+          "type": "string",
+          "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|shell)/summary\\.json$"
+        },
+        "summary_sha256": {
+          "type": "string",
+          "pattern": "^[0-9a-f]{64}$"
+        }
+      },
+      "additionalProperties": false
+    }
+  },
+  "additionalProperties": false,
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "rerun": {
+            "properties": {
+              "mode": {
+                "const": "carried_forward"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "counts": {
+            "type": "object",
+            "properties": {
+              "planned": {
+                "const": 0
+              },
+              "run": {
+                "const": 0
+              },
+              "unrun": {
+                "const": 0
+              },
+              "tests": {
+                "const": 0
+              },
+              "passed": {
+                "const": 0
+              },
+              "failures": {
+                "const": 0
+              },
+              "errors": {
+                "const": 0
+              },
+              "skipped": {
+                "const": 0
+              }
+            }
+          },
+          "shards": {
+            "maxItems": 0
+          },
+          "failures": {
+            "maxItems": 0
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "shards": {
+            "minItems": 1
+          }
+        }
+      }
+    }
+  ]
+}
