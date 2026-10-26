@@ -1,0 +1,2 @@
+# Retained producer responses contain CRLF and significant log whitespace.
+tests/fixtures/pr7990-rerun/** -whitespace
