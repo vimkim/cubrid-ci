@@ -39,6 +39,14 @@ pub enum AppError {
     #[error(transparent)]
     Shared(Arc<AppError>),
 
+    #[error("rerun source run {run_id} attempt {attempt}: {source}")]
+    RerunSource {
+        run_id: u64,
+        attempt: u64,
+        #[source]
+        source: Box<AppError>,
+    },
+
     #[error("{source}; pinned baseline request: {receipt}")]
     Baseline {
         receipt: PathBuf,
@@ -92,6 +100,7 @@ impl AppError {
     pub fn kind(&self) -> ExitKind {
         match self {
             Self::Shared(error) => error.kind(),
+            Self::RerunSource { source, .. } => source.kind(),
             Self::Baseline { source, .. } => source.kind(),
             Self::Input(_) => ExitKind::Input,
             Self::Unavailable(_) | Self::Expired(_) | Self::JobLevel(_) => ExitKind::Unavailable,
@@ -104,6 +113,7 @@ impl AppError {
     pub fn diagnostic_kind(&self) -> &'static str {
         match self {
             Self::Shared(error) => error.diagnostic_kind(),
+            Self::RerunSource { source, .. } => source.diagnostic_kind(),
             Self::Baseline { source, .. } => source.diagnostic_kind(),
             Self::Input(_) => "input",
             Self::Unavailable(_) => "unavailable",

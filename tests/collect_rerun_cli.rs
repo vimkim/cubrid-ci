@@ -191,6 +191,31 @@ async fn a_carried_verdict_requires_reconciled_source_junit_counts() {
     assert!(result["suites"]["test_sql"]["summary"].is_null());
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn source_pipeline_failure_is_a_dependency_failure_of_the_rerun() {
+    let fixture = Fixture::new().await;
+    let jobs = fixture.commands.path().join("source-jobs.json");
+    fs::write(&jobs, r#"{"jobs":[{"id":121594127253,"name":"plan / test_shell","run_attempt":1,"conclusion":"failure"}]}"#).unwrap();
+    let gh = fixture.commands.path().join("gh");
+    let original =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr7990-rerun/source/jobs.json");
+    let script = fs::read_to_string(&gh)
+        .unwrap()
+        .replace(original.to_str().unwrap(), jobs.to_str().unwrap());
+    fs::write(gh, script).unwrap();
+    let output = fixture.collect(&["test_shell"]);
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_shell"]["state"], "collection_failed");
+    assert_eq!(result["errors"][0]["diagnostic"], "job_level");
+    assert!(
+        result["errors"][0]["message"]
+            .as_str()
+            .unwrap()
+            .contains("source run 40323508581 attempt 1")
+    );
+}
+
 fn validate(name: &str, instance: &Value) {
     let schema: Value = serde_json::from_slice(
         &fs::read(

@@ -105,11 +105,18 @@ pub struct SuiteSummary {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct RerunSource {
-    pub mode: String,
+    pub mode: RerunMode,
     pub run_id: u64,
     pub attempt: u64,
     pub summary: PathBuf,
     pub summary_sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RerunMode {
+    Partial,
+    CarriedForward,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
@@ -614,7 +621,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             failures: Vec::new(),
             commit: Some(request.commit.to_owned()),
             rerun: Some(RerunSource {
-                mode: "carried_forward".to_owned(),
+                mode: RerunMode::CarriedForward,
                 ..source_link.clone()
             }),
         };
@@ -1335,8 +1342,14 @@ async fn collect_rerun_source(
         ));
     }
     match (source.updated_at, current.created_at) {
-        (Some(finished), Some(started)) if source.status.as_deref() == Some("completed") && finished <= started => {}
-        _ => return Err(AppError::Unavailable("source run is unfinished, was updated after the rerun started, or lacks timestamps; its source attempt cannot be established".to_owned())),
+        (Some(finished), Some(started))
+            if source.status.as_deref() == Some("completed") && finished <= started => {}
+        _ => {
+            return Err(AppError::Unavailable(format!(
+                "source run {source_run} attempt {} is unfinished, was updated after rerun {} started, or lacks timestamps; its source attempt cannot be established",
+                source.run_attempt, request.run_id
+            )));
+        }
     }
     let mut lineage = request.lineage.to_vec();
     lineage.push(request.run_id);
@@ -1364,7 +1377,12 @@ async fn collect_rerun_source(
         binary_bytes_remaining: &mut binary_bytes_remaining,
         binary_consumption: &mut binary_consumption,
     }))
-    .await?;
+    .await
+    .map_err(|error| AppError::RerunSource {
+        run_id: source_run,
+        attempt: source.run_attempt,
+        source: Box::new(error),
+    })?;
     let relative = PathBuf::from(format!(
         "providers/github-actions/runs/{source_run}/attempts/{}/{}/summary.json",
         source.run_attempt,
@@ -1396,7 +1414,7 @@ async fn collect_rerun_source(
     Ok((
         summary,
         RerunSource {
-            mode: "partial".to_owned(),
+            mode: RerunMode::Partial,
             run_id: source_run,
             attempt: source.run_attempt,
             summary: relative,
