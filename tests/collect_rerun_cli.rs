@@ -169,7 +169,7 @@ async fn replay_rejects_tampered_linked_source_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn a_carried_verdict_requires_reconciled_source_junit_counts() {
+async fn invalid_source_junit_does_not_block_independent_rerun_suites() {
     let fixture = Fixture::new().await;
     Mock::given(method("GET"))
         .and(path(
@@ -179,9 +179,17 @@ async fn a_carried_verdict_requires_reconciled_source_junit_counts() {
         .with_priority(1)
         .mount(&fixture.server)
         .await;
-    let output = fixture.collect(&["test_sql"]);
+    let output = fixture
+        .command(&[])
+        .arg("--include-binaries")
+        .output()
+        .unwrap();
     assert_eq!(output.status.code(), Some(4));
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_medium"]["state"], "completed");
+    assert_eq!(result["suites"]["test_shell"]["state"], "completed");
+    assert_eq!(result["suites"]["test_sql"]["state"], "collection_failed");
+    assert_eq!(result["errors"].as_array().unwrap().len(), 1);
     assert!(
         result["errors"][0]["message"]
             .as_str()

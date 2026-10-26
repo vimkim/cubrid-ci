@@ -791,7 +791,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     let mut remaining = shard_names.into_iter();
     let mut in_flight = futures_util::stream::FuturesUnordered::new();
     for _ in 0..request.fetch_concurrency {
-        if !request.acquisition.schedule_if_running(|| {
+        if !request.acquisition.schedule_if_running(suite, || {
             let Some(shard) = remaining.next() else {
                 return false;
             };
@@ -821,7 +821,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 fetch_errors.push((shard, error));
             }
         }
-        request.acquisition.schedule_if_running(|| {
+        request.acquisition.schedule_if_running(suite, || {
             let Some(shard) = remaining.next() else {
                 return false;
             };
@@ -839,7 +839,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     }
     if remaining.len() > 0 {
         return Err(AppError::Unavailable(
-            "shard acquisition stopped after another mandatory shard failed".to_owned(),
+            "shard acquisition stopped after a mandatory shard in this suite failed".to_owned(),
         ));
     }
     fetched_shards.sort_by(|left, right| left.name.cmp(&right.name));

@@ -814,7 +814,7 @@ async fn select_suite(
                 None,
             ),
             Err(error) => {
-                if let Err(stop_error) = resources.acquisition.stop() {
+                if let Err(stop_error) = resources.acquisition.stop(suite) {
                     return failed_suite_with_identity(
                         suite,
                         status.clone(),

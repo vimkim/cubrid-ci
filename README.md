@@ -140,6 +140,11 @@ the TOML configuration, in that precedence order. `cubrid-ci doctor` reports
 the effective value and source. The default's benchmark is recorded in
 [`docs/benchmarks/collection-fetch-concurrency-2026-09-23.md`](docs/benchmarks/collection-fetch-concurrency-2026-09-23.md).
 
+A mandatory acquisition failure stops new shards only in the affected suite.
+Already-running shards finish, and independent suites continue under the shared
+concurrency ceiling. Complete suite evidence remains available even when another
+suite makes the overall collection incomplete.
+
 PR collection stores GitHub Actions evidence by PR, commit, run, attempt, and
 suite. Commit/base collection stores it under
 `github-actions/CUBRID-cubrid/commits/<sha>` with the same run/attempt layout.

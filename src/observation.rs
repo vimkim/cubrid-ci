@@ -1,4 +1,4 @@
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -97,7 +97,7 @@ struct BinaryBudgetResult<'a> {
 
 #[derive(Default)]
 pub(crate) struct AcquisitionLedger {
-    scheduling_stopped: Mutex<bool>,
+    stopped_suites: Mutex<BTreeSet<&'static str>>,
     suites: Mutex<BTreeMap<String, SuiteAcquisition>>,
 }
 
@@ -180,8 +180,10 @@ struct AcquisitionFailure {
 }
 
 impl AcquisitionLedger {
-    fn scheduling_state(&self) -> Result<std::sync::MutexGuard<'_, bool>, AppError> {
-        self.scheduling_stopped.lock().map_err(|_| {
+    fn scheduling_state(
+        &self,
+    ) -> Result<std::sync::MutexGuard<'_, BTreeSet<&'static str>>, AppError> {
+        self.stopped_suites.lock().map_err(|_| {
             AppError::storage(
                 "collection observation scheduling lock",
                 std::io::Error::other("lock poisoned"),
@@ -240,7 +242,7 @@ impl AcquisitionLedger {
         error: &AppError,
     ) -> Result<(), AppError> {
         let mut stopped = self.scheduling_state()?;
-        *stopped = true;
+        stopped.insert(suite.job_name());
         self.record(
             suite,
             shard,
@@ -265,7 +267,7 @@ impl AcquisitionLedger {
         error: &AppError,
     ) -> Result<(), AppError> {
         let mut stopped = self.scheduling_state()?;
-        *stopped = true;
+        stopped.insert(suite.job_name());
         let mut suites = self.suites.lock().map_err(|_| {
             AppError::storage(
                 "collection observation acquisition lock",
@@ -307,18 +309,19 @@ impl AcquisitionLedger {
         Ok(())
     }
 
-    pub(crate) fn stop(&self) -> Result<(), AppError> {
+    pub(crate) fn stop(&self, suite: Suite) -> Result<(), AppError> {
         let mut stopped = self.scheduling_state()?;
-        *stopped = true;
+        stopped.insert(suite.job_name());
         Ok(())
     }
 
     pub(crate) fn schedule_if_running(
         &self,
+        suite: Suite,
         schedule: impl FnOnce() -> bool,
     ) -> Result<bool, AppError> {
         let stopped = self.scheduling_state()?;
-        if *stopped {
+        if stopped.contains(suite.job_name()) {
             return Ok(false);
         }
         Ok(schedule())

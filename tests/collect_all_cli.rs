@@ -16,6 +16,60 @@ const SHA: &str = "1111111111111111111111111111111111111111";
 const TC_SHA: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
 #[tokio::test(flavor = "multi_thread")]
+async fn a_failed_suite_does_not_stop_a_later_independent_suite() {
+    let server = MockServer::start().await;
+    mount_medium(&server).await;
+    mount_shell(&server).await;
+    Mock::given(method("GET"))
+        .and(path("/runs/200/medium/plan/plan.tsv"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(""))
+        .with_priority(1)
+        .mount(&server)
+        .await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    // Binary collection visits suites serially, so medium fails before shell starts.
+    let output = command(commands.path(), data.path())
+        .args([
+            "--suite",
+            "test_medium",
+            "--suite",
+            "test_shell",
+            "--include-binaries",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(
+        result["suites"]["test_medium"]["state"],
+        "collection_failed"
+    );
+    assert_eq!(
+        result["suites"]["test_shell"]["state"], "completed",
+        "{result}"
+    );
+    assert_eq!(result["errors"].as_array().unwrap().len(), 1);
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let observation = fs::read_dir(root.join("observations"))
+        .unwrap()
+        .next()
+        .unwrap()
+        .unwrap()
+        .path();
+    let observation_result: Value =
+        serde_json::from_slice(&fs::read(observation.join("result.json")).unwrap()).unwrap();
+    assert_eq!(
+        observation_result["acquisition"]["test_shell"]["shards"]["00"]["state"],
+        "retained"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn mixed_suite_states_keep_completed_evidence_from_independent_runs() {
     let server = MockServer::start().await;
     mount_medium(&server).await;
@@ -285,7 +339,7 @@ async fn completed_shard_raw_evidence_survives_a_later_shard_failure() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 8)]
-async fn suite_failure_stops_later_shard_scheduling_across_suites() {
+async fn suite_failure_keeps_independent_shards_running() {
     let server = MockServer::start().await;
     mount_medium_shards(&server, 4, None, &[]).await;
     mount_shell(&server).await;
@@ -331,6 +385,9 @@ async fn suite_failure_stops_later_shard_scheduling_across_suites() {
 
     assert_eq!(output.status.code(), Some(5));
     let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_medium"]["state"], "completed");
+    assert_eq!(result["suites"]["test_shell"]["state"], "collection_failed");
+    assert_eq!(result["errors"].as_array().unwrap().len(), 1);
     let observation =
         fs::read_dir(PathBuf::from(result["output_dir"].as_str().unwrap()).join("observations"))
             .unwrap()
@@ -344,7 +401,7 @@ async fn suite_failure_stops_later_shard_scheduling_across_suites() {
     assert_eq!(medium["00"]["state"], "retained");
     assert_eq!(medium["01"]["state"], "retained");
     assert_eq!(medium["02"]["state"], "retained");
-    assert_eq!(medium["03"]["state"], "not_attempted");
+    assert_eq!(medium["03"]["state"], "retained");
     assert_eq!(
         observation_result["acquisition"]["test_shell"]["errors"][0]["stage"],
         "plan_table"
