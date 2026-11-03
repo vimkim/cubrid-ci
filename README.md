@@ -147,17 +147,20 @@ saved result. If the result is empty or a structured error, `--pr`,
 after that time; it can be interrupted or failed. It then checks the
 observation schemas and identities, binary-budget arithmetic, manifest
 agreement, and every requested completed suite: raw index, digests and lengths,
-summary schema and identity, counts, failure files, binary inventory, and the
-complete rerun lineage. Symlinked or escaping paths are rejected. Collection
-reuses the same suite check before it trusts a warm summary.
+summary schema and identity, counts, failure files re-derived from the indexed
+JUnit, binary inventory, and the complete rerun lineage. Symlinked or escaping
+paths are rejected. Collection reuses the same summary check before it trusts a
+warm summary.
 
 The [`verification-v1`](schema/verification-v1.schema.json) report has an
 `assessment` with the observation, manifest, summary, identity, and suite-set
 facts, a per-suite result, an exact-baseline state for `collect-base` bundles,
-and issues. Exit 0 means fully verified evidence, 3 means unfinished,
-interrupted, failed, unselected, partial, or superseded evidence, 4 means a
-contradiction in retained evidence, and 2 means invalid input. Verification
-establishes integrity only; it never establishes CI causality.
+and issues. An exact-baseline state requires `--pr` and `--pr-head`. Exit 0
+means fully verified evidence, 3 means unfinished, interrupted, failed,
+unselected, partial, unpinned, or superseded evidence, 4 means a contradiction
+in retained evidence or with the pins, 6 means a local read failure, and 2 means
+invalid input. Verification establishes integrity only; it never establishes CI
+causality.
 
 ## Evidence storage
 

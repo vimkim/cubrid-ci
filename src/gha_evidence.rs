@@ -306,7 +306,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     if summary_path.exists()
         && (!request.include_binaries || suite_dir.join("binary-inventory.json").exists())
     {
-        let summary = verify_retained_suite(
+        let summary = validate_retained_summary(
             request.evidence_dir,
             request.suite,
             request.run_id,
@@ -315,6 +315,11 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             request.include_binaries,
         )?
         .summary;
+        // Collection may refetch a missing source; `verify` walks the same
+        // lineage offline through `verify_retained_suite`.
+        if let Some(source) = &summary.rerun {
+            validate_rerun_source(&request, source).await?;
+        }
         let shard_names = summary
             .shards
             .iter()
@@ -1285,8 +1290,12 @@ async fn collect_rerun_source(
         write_string_immutable(&metadata, &String::from_utf8_lossy(&bytes))?;
         bytes
     };
-    let source_attempt =
-        check_rerun_source_run(&bytes, request.run_json, source_run, request.run_id)?;
+    let source_attempt = check_rerun_source_run(
+        &bytes,
+        request.run_json,
+        source_run,
+        (request.run_id, request.attempt),
+    )?;
     let mut lineage = request.lineage.to_vec();
     lineage.push(request.run_id);
     let source_context = Mutex::new(None);
@@ -1348,6 +1357,30 @@ async fn collect_rerun_source(
     ))
 }
 
+async fn validate_rerun_source(
+    request: &SuiteRequest<'_>,
+    source: &RerunSource,
+) -> Result<(), AppError> {
+    let raw = request
+        .evidence_dir
+        .join(execution_path(
+            request.run_id,
+            request.attempt,
+            request.suite,
+        ))
+        .join("raw");
+    let (_, expected) = collect_rerun_source(request, source.run_id, &raw).await?;
+    if source.attempt != expected.attempt
+        || source.summary != expected.summary
+        || source.summary_sha256 != expected.summary_sha256
+    {
+        return Err(AppError::Integrity(
+            "stored rerun source reference disagrees with its validated source summary".to_owned(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) fn execution_path(run_id: u64, attempt: u64, suite: Suite) -> PathBuf {
     PathBuf::from(format!(
         "providers/github-actions/runs/{run_id}/attempts/{attempt}/{}",
@@ -1368,13 +1401,8 @@ pub struct VerifiedRerunSource {
     pub path: PathBuf,
 }
 
-pub(crate) struct VerifiedSuite {
-    pub summary: SuiteSummary,
-    pub sources: Vec<VerifiedRerunSource>,
-}
-
 /// Validates one published suite execution and its rerun lineage from retained
-/// files only. Collection reuse and `verify` share this check.
+/// files only, applying the same checks that acquisition applies to a source.
 pub(crate) fn verify_retained_suite(
     evidence_dir: &Path,
     suite: Suite,
@@ -1382,7 +1410,7 @@ pub(crate) fn verify_retained_suite(
     attempt: u64,
     commit: &str,
     include_binaries: bool,
-) -> Result<VerifiedSuite, AppError> {
+) -> Result<Vec<VerifiedRerunSource>, AppError> {
     let retained = validate_retained_summary(
         evidence_dir,
         suite,
@@ -1421,10 +1449,7 @@ pub(crate) fn verify_retained_suite(
         lineage.push(link.run_id);
         child = (link.run_id, link.attempt, source);
     }
-    Ok(VerifiedSuite {
-        summary: retained.summary,
-        sources,
-    })
+    Ok(sources)
 }
 
 fn verify_rerun_link(
@@ -1459,7 +1484,7 @@ fn verify_rerun_link(
         &read_retained(evidence_dir, &child_raw.join("github/rerun-source.json"))?,
         &read_retained(evidence_dir, &child_raw.join("github/run.json"))?,
         link.run_id,
-        child_run,
+        (child_run, child_attempt),
     )?;
     if source.sha256 != link.summary_sha256 || source_attempt != link.attempt {
         return Err(AppError::Integrity(
@@ -1526,10 +1551,15 @@ fn check_rerun_source_run(
     source_metadata: &[u8],
     child_run: &[u8],
     source_run: u64,
-    child_run_id: u64,
+    (child_run_id, child_attempt): (u64, u64),
 ) -> Result<u64, AppError> {
     let source: ActionRun = serde_json::from_slice(source_metadata)?;
     let current: ActionRun = serde_json::from_slice(child_run)?;
+    if current.id != child_run_id || current.run_attempt != child_attempt {
+        return Err(AppError::Integrity(
+            "rerun execution metadata disagrees with its execution identity".to_owned(),
+        ));
+    }
     if source.id != source_run || source.run_attempt == 0 {
         return Err(AppError::Integrity(
             "rerun source metadata has inconsistent execution identity".to_owned(),
@@ -2925,6 +2955,7 @@ fn check_failure_files(
     summary: &SuiteSummary,
 ) -> Result<(), AppError> {
     let mut seen = BTreeSet::new();
+    let mut junit = BTreeMap::new();
     for failure in &summary.failures {
         let id = &failure.stable_id;
         let message_path = PathBuf::from(format!("failures/{id}/message.txt"));
@@ -2965,12 +2996,64 @@ fn check_failure_files(
                 "stored failure metadata disagrees with its summary record: {id}"
             )));
         }
-        retained_path(evidence_dir, &execution.join(&message_path))?;
-        if extracted {
-            retained_path(evidence_dir, &execution.join(&diff_path))?;
+        if !junit.contains_key(&failure.shard) {
+            let cases = retained_junit_failures(evidence_dir, execution, summary, &failure.shard)?;
+            junit.insert(failure.shard.clone(), cases);
+        }
+        let Some((result, message)) = junit[&failure.shard].get(&failure.name) else {
+            return Err(AppError::Integrity(format!(
+                "stored failure has no matching retained JUnit failure: {id}"
+            )));
+        };
+        let diff = extract_diff(message).map(|diff| format!("{diff}\n"));
+        let retained_diff = extracted
+            .then(|| read_retained(evidence_dir, &execution.join(&diff_path)))
+            .transpose()?;
+        if failure.result != *result
+            || read_retained(evidence_dir, &execution.join(&message_path))? != message.as_bytes()
+            || retained_diff.as_deref() != diff.as_deref().map(str::as_bytes)
+        {
+            return Err(AppError::Integrity(format!(
+                "stored failure message or diff differs from its retained JUnit record: {id}"
+            )));
         }
     }
     Ok(())
+}
+
+/// Failed and errored cases of one shard, re-read from its digest-indexed JUnit
+/// files, so derived failure files can be checked against their source.
+fn retained_junit_failures(
+    evidence_dir: &Path,
+    execution: &Path,
+    summary: &SuiteSummary,
+    shard: &str,
+) -> Result<BTreeMap<String, (&'static str, String)>, AppError> {
+    let record = summary
+        .shards
+        .iter()
+        .find(|record| record.index == shard)
+        .ok_or_else(|| {
+            AppError::Integrity(format!("stored failure names an unknown shard: {shard}"))
+        })?;
+    let mut cases = BTreeMap::new();
+    for file in &record.junit_files {
+        let xml = retained_text(
+            evidence_dir,
+            &execution.join("raw/shards").join(shard).join(file),
+        )?;
+        for case in parse_junit(&xml)? {
+            let failed = match (case.failure, case.error) {
+                (Some(message), _) => Some(("failure", message)),
+                (_, Some(message)) => Some(("error", message)),
+                _ => None,
+            };
+            if let Some(failed) = failed {
+                cases.insert(case.name, failed);
+            }
+        }
+    }
+    Ok(cases)
 }
 
 /// Resolves a retained file beneath `root`, rejecting unsafe relative paths
@@ -2986,12 +3069,8 @@ fn retained_path(root: &Path, relative: &Path) -> Result<PathBuf, AppError> {
             )));
         };
         path.push(name);
-        let metadata = fs::symlink_metadata(&path).map_err(|error| {
-            AppError::Integrity(format!(
-                "read retained evidence {}: {error}",
-                relative.display()
-            ))
-        })?;
+        let metadata = fs::symlink_metadata(&path)
+            .map_err(|error| retained_read_error(relative, &path, error))?;
         if metadata.file_type().is_symlink() {
             return Err(AppError::Integrity(format!(
                 "retained evidence path contains a symbolic link: {}",
@@ -3011,12 +3090,18 @@ fn retained_path(root: &Path, relative: &Path) -> Result<PathBuf, AppError> {
 
 pub(crate) fn read_retained(root: &Path, relative: &Path) -> Result<Vec<u8>, AppError> {
     let path = retained_path(root, relative)?;
-    fs::read(&path).map_err(|error| {
+    fs::read(&path).map_err(|error| retained_read_error(relative, &path, error))
+}
+
+fn retained_read_error(relative: &Path, path: &Path, error: std::io::Error) -> AppError {
+    if error.kind() == std::io::ErrorKind::NotFound {
         AppError::Integrity(format!(
-            "read retained evidence {}: {error}",
+            "declared retained evidence is missing: {}",
             relative.display()
         ))
-    })
+    } else {
+        AppError::storage(path, error)
+    }
 }
 
 fn retained_text(root: &Path, relative: &Path) -> Result<String, AppError> {

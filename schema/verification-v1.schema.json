@@ -136,7 +136,7 @@
           "minLength": 1
         },
         "kind": {
-          "enum": ["integrity", "unavailable"]
+          "enum": ["integrity", "unavailable", "storage"]
         },
         "message": {
           "type": "string"

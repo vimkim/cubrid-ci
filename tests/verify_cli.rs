@@ -97,6 +97,11 @@ async fn failure_files_must_exist_and_match_the_summary() {
     assert_eq!(code, Some(4), "{report:#}");
     assert_issue(&report, "test_sql", "integrity", "message.txt");
 
+    fs::write(failure.join("message.txt"), b"edited message").unwrap();
+    let (code, report) = fixture.verify(&result, &[]);
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_issue(&report, "test_sql", "integrity", "retained JUnit record");
+
     fs::write(failure.join("message.txt"), message).unwrap();
     rewrite_json(&failure.join("metadata.json"), |metadata| {
         metadata["result"] = json!("error");
@@ -218,11 +223,21 @@ async fn invalid_observation_request_is_an_integrity_failure() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
-async fn superseded_and_tampered_manifests_are_distinguished() {
+async fn later_manifests_are_accepted_superseded_or_rejected_by_agreement() {
     let fixture = SqlFixture::new().await;
     let first = fixture.collect_ok();
-    let second = fixture.collect_ok();
-    assert_ne!(first["collected_at"], second["collected_at"]);
+    let equivalent = fixture.collect_ok();
+    assert_ne!(first["collected_at"], equivalent["collected_at"]);
+
+    let (code, report) = fixture.verify(&first, &[]);
+    assert_eq!(code, Some(0), "{report:#}");
+    assert_eq!(report["assessment"]["manifest"], "validated");
+
+    fixture.write_status("PENDING");
+    let output = fixture.collect();
+    assert_eq!(output.status.code(), Some(3));
+    let running: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(running["suites"]["test_sql"]["state"], "running");
 
     let (code, report) = fixture.verify(&first, &[]);
     assert_eq!(code, Some(3), "{report:#}");
@@ -235,21 +250,17 @@ async fn superseded_and_tampered_manifests_are_distinguished() {
         "replaced by observation",
     );
 
-    let (code, report) = fixture.verify(&second, &[]);
-    assert_eq!(code, Some(0), "{report:#}");
+    let (code, report) = fixture.verify(&running, &[]);
+    assert_eq!(code, Some(3), "{report:#}");
+    assert_eq!(report["assessment"]["observation"], "incomplete");
+    assert_eq!(report["assessment"]["manifest"], "validated");
+    assert_eq!(report["assessment"]["requested_summaries"], "none");
 
     rewrite_json(
-        &fixture.snapshot(&second).join("manifest.json"),
-        |manifest| {
-            manifest["errors"] = json!([{
-                "suite": "test_sql",
-                "kind": "integrity",
-                "diagnostic": "identity_or_integrity",
-                "message": "edited"
-            }]);
-        },
+        &fixture.snapshot(&running).join("manifest.json"),
+        |manifest| manifest["suites"]["test_sql"]["state"] = json!("completed"),
     );
-    let (code, report) = fixture.verify(&second, &[]);
+    let (code, report) = fixture.verify(&running, &[]);
     assert_eq!(code, Some(4), "{report:#}");
     assert_eq!(report["assessment"]["manifest"], "invalid");
     assert_issue(
@@ -566,6 +577,100 @@ esac"#,
     );
     assert_eq!(code, Some(4), "{report:#}");
     assert_eq!(report["baseline"], "invalid");
+
+    let (code, report) = verify_in(evidence.path(), &data, &result, &["--suite", "test_sql"]);
+    assert_eq!(code, Some(3), "{report:#}");
+    assert_eq!(report["baseline"], "unavailable");
+    assert_issue(&report, "identity", "unavailable", "--pr and --pr-head");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn command_result_flags_must_agree_with_suite_states() {
+    let fixture = SqlFixture::new().await;
+    let mut result = fixture.collect_ok();
+    result["errors"] = json!([{
+        "suite": "test_sql",
+        "kind": "integrity",
+        "diagnostic": "identity_or_integrity",
+        "message": "edited"
+    }]);
+    let snapshot = fixture.snapshot(&result);
+    rewrite_json(
+        &only_observation(&snapshot).join("result.json"),
+        |observed| observed["command"] = result.clone(),
+    );
+    fs::write(
+        snapshot.join("manifest.json"),
+        serde_json::to_vec_pretty(&result).unwrap(),
+    )
+    .unwrap();
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_eq!(report["assessment"]["identity"], "unknown");
+    assert_issue(&report, "identity", "integrity", "ok flag disagrees");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn missing_manifest_and_unreadable_observations_are_reported() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let snapshot = fixture.snapshot(&result);
+    fs::remove_file(snapshot.join("manifest.json")).unwrap();
+
+    let (code, report) = fixture.verify(&result, &[]);
+    assert_eq!(code, Some(3), "{report:#}");
+    assert_eq!(report["assessment"]["manifest"], "missing");
+    assert_eq!(report["assessment"]["requested_summaries"], "validated");
+
+    let observed = only_observation(&snapshot).join("result.json");
+    let bytes = fs::read(&observed).unwrap();
+    fs::write(&observed, &bytes[..bytes.len() / 2]).unwrap();
+    let (code, report) = fixture.verify(&result, &[]);
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_eq!(report["assessment"]["observation"], "unvalidated");
+    assert_issue(
+        &report,
+        "observation",
+        "integrity",
+        "unreadable or malformed",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn several_matching_observations_are_ambiguous() {
+    let fixture = SqlFixture::new().await;
+    fixture.write_gh("2222222222222222222222222222222222222222");
+    let since = now();
+    for _ in 0..2 {
+        assert_eq!(fixture.collect().status.code(), Some(4));
+    }
+
+    let (code, report) =
+        fixture.verify_raw(b"", &["--pr", "7990", "--pr-head", SHA, "--since", &since]);
+
+    assert_eq!(code, Some(3), "{report:#}");
+    assert_eq!(report["assessment"]["observation"], "unvalidated");
+    assert_issue(&report, "observation", "unavailable", "ambiguous");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_evidence_is_a_storage_failure() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let junit = find(&fixture.suite_dir(&result).join("raw"), "results.xml");
+    fs::set_permissions(&junit, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read(&junit).is_ok() {
+        return;
+    }
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    fs::set_permissions(&junit, fs::Permissions::from_mode(0o644)).unwrap();
+    assert_eq!(code, Some(6), "{report:#}");
+    assert_eq!(report["suites"]["test_sql"]["summary"], "invalid");
+    assert_issue(&report, "test_sql", "storage", "results.xml");
 }
 
 #[test]
@@ -605,6 +710,15 @@ impl SqlFixture {
         };
         fixture.write_gh(SHA);
         fixture
+    }
+
+    fn write_status(&self, state: &str) {
+        let status = status_snapshot().replace("\"FAILURE\"", &format!("\"{state}\""));
+        write_command(
+            self.commands.path(),
+            "cubrid-pr-status",
+            &format!("/bin/cat <<'JSON'\n{status}\nJSON"),
+        );
     }
 
     fn write_gh(&self, published_head: &str) {

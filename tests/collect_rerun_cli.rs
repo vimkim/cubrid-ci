@@ -169,6 +169,32 @@ async fn replay_rejects_tampered_linked_source_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn warm_rerun_reuse_refetches_a_missing_source_bundle() {
+    let fixture = Fixture::new().await;
+    let output = fixture.collect(&["test_shell"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let root = Path::new(result["output_dir"].as_str().unwrap());
+    let source =
+        root.join("providers/github-actions/runs/40323508581/attempts/1/test_shell/summary.json");
+    let source_bytes = fs::read(&source).unwrap();
+    fs::remove_dir_all(root.join("providers/github-actions/runs/40323508581")).unwrap();
+
+    let output = fixture.collect(&["test_shell"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    assert_eq!(fs::read(source).unwrap(), source_bytes);
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn invalid_source_junit_does_not_block_independent_rerun_suites() {
     let fixture = Fixture::new().await;
     Mock::given(method("GET"))

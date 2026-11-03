@@ -73,6 +73,7 @@ pub enum BaselineState {
 pub enum IssueKind {
     Integrity,
     Unavailable,
+    Storage,
 }
 
 /// Facts about one collection observation and its retained bundle. The
@@ -117,13 +118,12 @@ pub struct Issue {
 
 impl VerificationReport {
     pub fn exit_code(&self) -> u8 {
+        let has = |kind| self.issues.iter().any(|issue| issue.kind == kind);
         if self.ok {
             0
-        } else if self
-            .issues
-            .iter()
-            .any(|issue| issue.kind == IssueKind::Integrity)
-        {
+        } else if has(IssueKind::Storage) {
+            ExitKind::Storage.code()
+        } else if has(IssueKind::Integrity) {
             ExitKind::Integrity.code()
         } else {
             ExitKind::Unavailable.code()
@@ -198,18 +198,18 @@ impl Findings {
     }
 
     fn error(&mut self, scope: &str, error: &AppError) {
-        let kind = if error.kind() == ExitKind::Unavailable {
-            IssueKind::Unavailable
-        } else {
-            IssueKind::Integrity
+        let kind = match error.kind() {
+            ExitKind::Unavailable => IssueKind::Unavailable,
+            ExitKind::Storage if !matches!(error, AppError::Serialization(_)) => IssueKind::Storage,
+            _ => IssueKind::Integrity,
         };
         self.add(scope, kind, error.to_string());
     }
 
-    fn has_integrity(&self) -> bool {
+    fn has_contradiction(&self) -> bool {
         self.0
             .iter()
-            .any(|issue| issue.kind == IssueKind::Integrity)
+            .any(|issue| issue.kind != IssueKind::Unavailable)
     }
 }
 
@@ -284,7 +284,7 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
         return Ok(unselected(None, unselected_identity, findings));
     };
 
-    let observations = load_observations(&snapshot);
+    let (observations, unreadable) = load_observations(&snapshot);
     let matches = observations
         .iter()
         .filter(|observation| started_since(&observation.request, pins.since))
@@ -303,6 +303,14 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
                 "observation",
                 "no collection observation in the evidence snapshot matches this collector result and its pins",
             );
+            for id in unreadable {
+                findings.integrity(
+                    "observation",
+                    format!(
+                        "observation {id} is unreadable or malformed and may be the one this result came from"
+                    ),
+                );
+            }
             return Ok(unselected(Some(snapshot), unselected_identity, findings));
         }
         many => {
@@ -423,6 +431,13 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
         result_matches_observation,
         requested_suites_reconciled: reconciled,
     };
+    let pinned = pins.pr.is_some() && pins.head.is_some();
+    if baseline_relationship && !pinned {
+        findings.unavailable(
+            "identity",
+            "an exact baseline needs --pr and --pr-head to check its baseline relationship",
+        );
+    }
     let ok = assessment.identity == Identity::Established
         && assessment.observation == ObservationState::Complete
         && assessment.manifest == ManifestState::Validated
@@ -433,12 +448,14 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
     let baseline = baseline_relationship.then(|| {
         if ok {
             BaselineState::ValidatedExact
-        } else if findings.has_integrity() || assessment.identity == Identity::Unknown {
+        } else if findings.has_contradiction() || assessment.identity == Identity::Unknown {
             BaselineState::Invalid
-        } else if matches!(
-            assessment.observation,
-            ObservationState::Complete | ObservationState::Incomplete
-        ) && assessment.manifest == ManifestState::Validated
+        } else if pinned
+            && matches!(
+                assessment.observation,
+                ObservationState::Complete | ObservationState::Incomplete
+            )
+            && assessment.manifest == ManifestState::Validated
             && assessment.result_matches_observation
             && assessment.requested_suites_reconciled
             && assessment.requested_summaries == SummariesState::Partial
@@ -554,32 +571,42 @@ fn request_matches_pins(request: &Value, pins: &Pins) -> bool {
         && suite_set(&request["requested_suites"]).as_ref() == Some(&pins.suites)
 }
 
-fn load_observations(snapshot: &Path) -> Vec<Observation> {
+/// Readable observations, plus the names of entries whose request or result
+/// cannot be read or parsed.
+fn load_observations(snapshot: &Path) -> (Vec<Observation>, Vec<String>) {
     let Ok(entries) = fs::read_dir(snapshot.join("observations")) else {
-        return Vec::new();
+        return (Vec::new(), Vec::new());
     };
-    let mut observations = entries
-        .filter_map(Result::ok)
-        .filter_map(|entry| {
-            let id = entry.file_name().into_string().ok()?;
-            let relative = Path::new("observations").join(&id);
-            let request = read_json(snapshot, &relative.join("request.json"))?;
-            let result_path = relative.join("result.json");
-            let result = if snapshot.join(&result_path).exists() {
-                Some(read_json(snapshot, &result_path)?)
-            } else {
-                None
-            };
-            Some(Observation {
+    let mut observations = Vec::new();
+    let mut unreadable = Vec::new();
+    for entry in entries.filter_map(Result::ok) {
+        let id = entry.file_name().to_string_lossy().into_owned();
+        let relative = Path::new("observations").join(&id);
+        let result_path = relative.join("result.json");
+        let request = read_json(snapshot, &relative.join("request.json"));
+        let result = snapshot
+            .join(&result_path)
+            .exists()
+            .then(|| read_json(snapshot, &result_path));
+        match (request, result) {
+            (Some(request), None) => observations.push(Observation {
                 dir: snapshot.join(&relative),
                 id,
                 request,
-                result,
-            })
-        })
-        .collect::<Vec<_>>();
+                result: None,
+            }),
+            (Some(request), Some(Some(result))) => observations.push(Observation {
+                dir: snapshot.join(&relative),
+                id,
+                request,
+                result: Some(result),
+            }),
+            _ => unreadable.push(id),
+        }
+    }
     observations.sort_by(|left, right| left.id.cmp(&right.id));
-    observations
+    unreadable.sort();
+    (observations, unreadable)
 }
 
 fn read_json(root: &Path, relative: &Path) -> Option<Value> {
@@ -637,7 +664,18 @@ fn observation_state(observation: &Observation, findings: &mut Findings) -> Obse
     match (result["outcome"].as_str(), command_ok) {
         (Some("complete"), Some(true)) => ObservationState::Complete,
         (Some("incomplete"), Some(false)) => ObservationState::Incomplete,
-        (Some("failed"), None) => ObservationState::Failed,
+        (Some("failed"), None) => {
+            findings.unavailable(
+                "observation",
+                format!(
+                    "collection failed: {} ({}): {}",
+                    result["error"]["kind"].as_str().unwrap_or("unknown"),
+                    result["error"]["diagnostic"].as_str().unwrap_or("unknown"),
+                    result["error"]["message"].as_str().unwrap_or_default()
+                ),
+            );
+            ObservationState::Failed
+        }
         _ => {
             findings.integrity(
                 "observation",
@@ -744,12 +782,22 @@ fn command_identity(
             "the command result and observation request disagree on repository, PR, selection, or commit",
         );
     }
+    let all_completed = parsed
+        .suites
+        .values()
+        .all(|suite| suite.state == SuiteState::Completed);
+    if parsed.ok != all_completed || (parsed.ok && !parsed.errors.is_empty()) {
+        fail(
+            findings,
+            "the command result's ok flag disagrees with its suite states and errors",
+        );
+    }
     let directory = match (&parsed.pr, &parsed.selection) {
         (Some(pr), None) if parsed.schema_version == 2 => {
-            if pr.head_sha != parsed.commit {
+            if pr.head_sha != parsed.commit || pr_number(&pr.url).ok() != Some(pr.number) {
                 fail(
                     findings,
-                    "the PR head in the command result differs from its commit",
+                    "the PR URL, number, or head in the command result disagree with its commit",
                 );
             }
             format!("pr-{}", pr.number)
@@ -844,13 +892,17 @@ fn manifest_state(
     if manifest == *command {
         return ManifestState::Validated;
     }
-    if let Some(later) = observations.iter().find(|observation| {
+    let later = observations.iter().find(|observation| {
         observation.id != selected.id
             && observation
                 .result
                 .as_ref()
                 .is_some_and(|result| result.get("command") == Some(&manifest))
-    }) {
+    });
+    if later.is_some() && manifest_agrees(&manifest, command) {
+        return ManifestState::Validated;
+    }
+    if let Some(later) = later {
         findings.unavailable(
             "manifest",
             format!(
@@ -865,6 +917,31 @@ fn manifest_state(
         );
     }
     ManifestState::Invalid
+}
+
+/// A later collection may replace the root manifest. It still agrees with
+/// this observation when the identity, suite states, and errors match.
+fn manifest_agrees(manifest: &Value, command: &Value) -> bool {
+    let states = |value: &Value| {
+        value["suites"].as_object().map(|suites| {
+            suites
+                .iter()
+                .map(|(name, suite)| (name.clone(), suite["state"].clone()))
+                .collect::<BTreeMap<_, _>>()
+        })
+    };
+    [
+        "/schema_version",
+        "/repository",
+        "/pr/number",
+        "/pr/url",
+        "/commit",
+        "/output_dir",
+        "/errors",
+    ]
+    .iter()
+    .all(|pointer| manifest.pointer(pointer) == command.pointer(pointer))
+        && states(manifest) == states(command)
 }
 
 fn verify_suite(
@@ -915,10 +992,10 @@ fn verify_suite(
         commit,
         include_binaries,
     ) {
-        Ok(verified) => {
+        Ok(sources) => {
             verification.summary = SummaryState::Validated;
             verification.path = Some(path);
-            verification.rerun_sources = verified.sources;
+            verification.rerun_sources = sources;
         }
         Err(error) => {
             findings.error(name, &error);
