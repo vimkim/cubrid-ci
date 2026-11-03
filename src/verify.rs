@@ -392,18 +392,27 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
             &mut findings,
         );
         let include_binaries = observation.request["binary_budget"]["include"] == true;
-        for (name, result) in &parsed.suites {
+        for (suite, result) in &parsed.suites {
             suites.insert(
-                name.clone(),
+                suite.clone(),
                 verify_suite(
                     &snapshot,
-                    name,
+                    suite,
                     result,
                     &parsed.commit,
                     include_binaries,
                     &mut findings,
                 ),
             );
+            if state == ObservationState::Incomplete && result.state != SuiteState::Completed {
+                findings.unavailable(
+                    suite,
+                    format!(
+                        "the suite is {} and has no validated summary",
+                        name(&result.state)
+                    ),
+                );
+            }
         }
     } else {
         findings.unavailable(
@@ -421,6 +430,16 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
     {
         state = ObservationState::Unvalidated;
     }
+    let pinned = pins.pr.is_some() && pins.head.is_some();
+    // Unpinned is unconfirmed, not contradicted, so it stays out of the baseline's `invalid`.
+    let identity_contradicted = identity == Identity::Unknown;
+    if baseline_relationship && !pinned {
+        findings.unavailable(
+            "identity",
+            "an exact baseline needs --pr and --pr-head to check its baseline relationship",
+        );
+        identity = Identity::Unknown;
+    }
     let assessment = Assessment {
         identity,
         observation: state,
@@ -429,13 +448,6 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
         result_matches_observation,
         requested_suites_reconciled: reconciled,
     };
-    let pinned = pins.pr.is_some() && pins.head.is_some();
-    if baseline_relationship && !pinned {
-        findings.unavailable(
-            "identity",
-            "an exact baseline needs --pr and --pr-head to check its baseline relationship",
-        );
-    }
     let ok = assessment.identity == Identity::Established
         && assessment.observation == ObservationState::Complete
         && assessment.manifest == ManifestState::Validated
@@ -446,7 +458,7 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
     let baseline = baseline_relationship.then(|| {
         if ok {
             BaselineState::ValidatedExact
-        } else if findings.has_contradiction() || assessment.identity == Identity::Unknown {
+        } else if findings.has_contradiction() || identity_contradicted {
             BaselineState::Invalid
         } else if pinned
             && matches!(
