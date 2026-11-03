@@ -437,6 +437,7 @@ async fn later_manifests_are_accepted_superseded_or_rejected_by_agreement() {
     assert_eq!(report["assessment"]["observation"], "incomplete");
     assert_eq!(report["assessment"]["manifest"], "validated");
     assert_eq!(report["assessment"]["requested_summaries"], "none");
+    assert_issue(&report, "test_sql", "unavailable", "running");
 
     rewrite_json(
         &fixture.snapshot(&running).join("manifest.json"),
@@ -697,6 +698,14 @@ async fn incomplete_observation_reports_validated_suites_separately() {
     assert_eq!(report["suites"]["test_sql"]["state"], "collection_failed");
     assert_eq!(report["suites"]["test_sql"]["summary"], "absent");
     assert_eq!(report["suites"]["test_shell"]["summary"], "validated");
+    assert_issue(&report, "test_sql", "unavailable", "collection_failed");
+    let named = report["issues"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|issue| issue["scope"] == "test_shell")
+        .count();
+    assert_eq!(named, 0, "{report:#}");
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -782,6 +791,7 @@ esac"#,
     let (code, report) = verify_in(evidence.path(), &data, &result, &["--suite", "test_sql"]);
     assert_eq!(code, Some(3), "{report:#}");
     assert_eq!(report["baseline"], "unavailable");
+    assert_eq!(report["assessment"]["identity"], "unknown", "{report:#}");
     assert_issue(&report, "identity", "unavailable", "--pr and --pr-head");
 }
 
