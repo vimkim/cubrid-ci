@@ -1,0 +1,148 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://cubrid.org/schemas/cubrid-ci/verification-v1.schema.json",
+  "title": "CUBRID CI retained-evidence verification report v1",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "ok",
+    "output_dir",
+    "observation_dir",
+    "assessment",
+    "baseline",
+    "suites",
+    "issues"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "output_dir": {
+      "type": ["string", "null"]
+    },
+    "observation_dir": {
+      "type": ["string", "null"]
+    },
+    "assessment": {
+      "type": "object",
+      "required": [
+        "identity",
+        "observation",
+        "manifest",
+        "requested_summaries",
+        "result_matches_observation",
+        "requested_suites_reconciled"
+      ],
+      "properties": {
+        "identity": {
+          "enum": ["established", "unknown"]
+        },
+        "observation": {
+          "enum": ["complete", "incomplete", "interrupted", "failed", "unvalidated"]
+        },
+        "manifest": {
+          "enum": ["validated", "missing", "invalid"]
+        },
+        "requested_summaries": {
+          "enum": ["validated", "partial", "none", "invalid"]
+        },
+        "result_matches_observation": {
+          "type": "boolean"
+        },
+        "requested_suites_reconciled": {
+          "type": "boolean"
+        }
+      },
+      "additionalProperties": false
+    },
+    "baseline": {
+      "enum": ["validated_exact", "partial_exact", "unavailable", "invalid", null]
+    },
+    "suites": {
+      "type": "object",
+      "propertyNames": {
+        "enum": ["test_medium", "test_sql", "test_shell"]
+      },
+      "additionalProperties": {
+        "$ref": "#/$defs/suite"
+      }
+    },
+    "issues": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/issue"
+      }
+    }
+  },
+  "additionalProperties": false,
+  "$defs": {
+    "suite": {
+      "type": "object",
+      "required": ["state", "summary", "rerun_sources"],
+      "properties": {
+        "state": {
+          "enum": [
+            "running",
+            "not_observed",
+            "completed",
+            "job_level_failure",
+            "collection_failed"
+          ]
+        },
+        "summary": {
+          "enum": ["validated", "invalid", "absent"]
+        },
+        "path": {
+          "type": "string",
+          "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|shell)/summary\\.json$"
+        },
+        "rerun_sources": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["run_id", "attempt", "mode", "path"],
+            "properties": {
+              "run_id": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "attempt": {
+                "type": "integer",
+                "minimum": 1
+              },
+              "mode": {
+                "enum": ["partial", "carried_forward"]
+              },
+              "path": {
+                "type": "string",
+                "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|shell)/summary\\.json$"
+              }
+            },
+            "additionalProperties": false
+          }
+        }
+      },
+      "additionalProperties": false
+    },
+    "issue": {
+      "type": "object",
+      "required": ["scope", "kind", "message"],
+      "properties": {
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "enum": ["integrity", "unavailable"]
+        },
+        "message": {
+          "type": "string"
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

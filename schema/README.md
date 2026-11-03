@@ -19,3 +19,8 @@ PR-head identity field. Observation v2 embeds that selection in its request and
 the v3 command in its result. Existing PR commands continue to produce the v2
 command/v1 observation pair. Suite summaries, raw indexes, and failure schemas
 remain v2 and retain their original digest/identity guarantees.
+
+The verification v1 schema describes the offline `verify` report. Its
+`assessment` states whether one observation and its retained bundle are
+established, complete, and unmodified. The report is derived data; it is not
+stored in the evidence root.

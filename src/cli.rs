@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
+use chrono::{DateTime, Utc};
 use clap::{ArgAction, Args, Parser, Subcommand};
 
 use crate::config::parse_fetch_concurrency;
@@ -40,6 +41,34 @@ pub enum Commands {
     CollectCommit(CommitArgs),
     /// Resolve a PR merge base and collect its existing CI evidence.
     CollectBase(BaseArgs),
+    /// Verify a retained collection observation and its evidence offline.
+    Verify(VerifyArgs),
+}
+
+#[derive(Debug, Clone, Args)]
+pub struct VerifyArgs {
+    /// Saved JSON output of collect, collect-commit, or collect-base; it may be empty.
+    pub result: PathBuf,
+
+    /// CUBRID pull-request number or URL that the evidence must belong to.
+    #[arg(long)]
+    pub pr: Option<String>,
+
+    /// Pinned 40-character PR head SHA; a baseline must be resolved from it.
+    #[arg(long)]
+    pub pr_head: Option<String>,
+
+    /// Requested suite, as passed to the collection; repeat for a subset (all suites by default).
+    #[arg(long, value_enum)]
+    pub suite: Vec<Suite>,
+
+    /// Ignore observations whose request started before this RFC 3339 time.
+    #[arg(long, value_parser = parse_time)]
+    pub since: Option<DateTime<Utc>>,
+
+    /// Root directory for durable evidence, used to locate an observation without a result.
+    #[arg(long)]
+    pub data_dir: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Args)]
@@ -193,6 +222,12 @@ pub struct StatusArgs {
     pub human: bool,
 }
 
+fn parse_time(value: &str) -> Result<DateTime<Utc>, String> {
+    DateTime::parse_from_rfc3339(value)
+        .map(|time| time.with_timezone(&Utc))
+        .map_err(|error| format!("must be an RFC 3339 time: {error}"))
+}
+
 fn parse_duration(value: &str) -> Result<Duration, String> {
     humantime::parse_duration(value).map_err(|error| error.to_string())
 }
@@ -211,6 +246,7 @@ mod tests {
             "doctor",
             "collect-commit",
             "collect-base",
+            "verify",
         ] {
             assert!(Cli::try_parse_from(["cubrid-ci", command, "--help"]).is_err());
         }

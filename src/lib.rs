@@ -12,6 +12,7 @@ pub mod observation;
 pub mod progress;
 pub mod status;
 pub mod storage;
+pub mod verify;
 
 pub use cli::Cli;
 pub use error::{AppError, ExitKind};

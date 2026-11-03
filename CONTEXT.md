@@ -97,6 +97,10 @@ _Avoid_: Trusted evidence
 Raw evidence obtained from an authorized evidence source before complete suite identity and integrity validation. It may support diagnosis but must never be presented as validated suite evidence.
 _Avoid_: Untrusted evidence, partial evidence
 
+**Evidence verification**:
+An offline check that one collection observation produced a caller's saved collector result and that its retained evidence is still complete and unmodified. It establishes integrity, not a suite verdict or CI causality.
+_Avoid_: Revalidation, re-collection
+
 **Binary transfer budget**:
 The collection-wide limit on optional binary response-body bytes consumed during one invocation, including bytes read from artifacts that are ultimately excluded.
 _Avoid_: Retained-byte budget, binary size limit

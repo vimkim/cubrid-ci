@@ -119,7 +119,7 @@ pub enum RerunMode {
     CarriedForward,
 }
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct TestCounts {
     pub planned: u64,
     pub run: u64,
@@ -299,73 +299,22 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         ));
     }
     let layout = SuiteLayout::for_suite(request.suite);
-    let execution_suite_dir = request
-        .evidence_dir
-        .join("providers/github-actions/runs")
-        .join(request.run_id.to_string())
-        .join("attempts")
-        .join(request.attempt.to_string())
-        .join(request.suite.job_name());
-    let provider_raw = execution_suite_dir.join("raw");
-    let suite_dir = execution_suite_dir;
+    let execution = execution_path(request.run_id, request.attempt, request.suite);
+    let suite_dir = request.evidence_dir.join(&execution);
+    let provider_raw = suite_dir.join("raw");
     let summary_path = suite_dir.join("summary.json");
-    let raw_index_path = provider_raw.join("index.json");
-    let expected_summary_digest = if raw_index_path.exists() {
-        Some(validate_raw_index(
-            &provider_raw,
-            request.run_id,
-            request.attempt,
-            request.suite.job_name(),
-        )?)
-    } else if summary_path.exists() {
-        return Err(AppError::Integrity(format!(
-            "stored summary has no raw evidence index: {}",
-            summary_path.display()
-        )));
-    } else {
-        None
-    };
     if summary_path.exists()
         && (!request.include_binaries || suite_dir.join("binary-inventory.json").exists())
     {
-        let bytes =
-            fs::read(&summary_path).map_err(|source| AppError::storage(&summary_path, source))?;
-        validate_summary_schema(&bytes)?;
-        let actual_summary_digest = hex::encode(Sha256::digest(&bytes));
-        if expected_summary_digest.as_deref() != Some(actual_summary_digest.as_str()) {
-            return Err(AppError::Integrity(format!(
-                "stored summary digest disagrees with the raw evidence index: {}",
-                summary_path.display()
-            )));
-        }
-        let summary: SuiteSummary =
-            serde_json::from_slice(&bytes).map_err(|source| AppError::Json {
-                endpoint: summary_path.display().to_string(),
-                source,
-            })?;
-        if summary.run_id != request.run_id
-            || summary.attempt != request.attempt
-            || summary.suite != request.suite.job_name()
-            || summary
-                .commit
-                .as_deref()
-                .is_some_and(|commit| commit != request.commit)
-            || summary
-                .shards
-                .iter()
-                .any(|shard| !shard.build.sha.eq_ignore_ascii_case(request.commit))
-        {
-            return Err(AppError::Integrity(format!(
-                "stored immutable summary does not match {} run {} attempt {}",
-                request.suite, request.run_id, request.attempt
-            )));
-        }
-        if let Some(source) = &summary.rerun {
-            validate_rerun_source(&request, source).await?;
-        }
-        if request.include_binaries {
-            validate_binary_inventory(&suite_dir)?;
-        }
+        let summary = verify_retained_suite(
+            request.evidence_dir,
+            request.suite,
+            request.run_id,
+            request.attempt,
+            request.commit,
+            request.include_binaries,
+        )?
+        .summary;
         let shard_names = summary
             .shards
             .iter()
@@ -376,6 +325,20 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             request.acquisition.retained(request.suite, shard)?;
         }
         return Ok(summary);
+    }
+    if provider_raw.join("index.json").exists() {
+        validate_raw_index(
+            request.evidence_dir,
+            &execution.join("raw"),
+            request.run_id,
+            request.attempt,
+            request.suite.job_name(),
+        )?;
+    } else if summary_path.exists() {
+        return Err(AppError::Integrity(format!(
+            "stored summary has no raw evidence index: {}",
+            summary_path.display()
+        )));
     }
     write_string_if_absent(
         &provider_raw.join("github/status-snapshot.json"),
@@ -582,31 +545,19 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
     if let Some((source_summary, source_link)) = &source
         && plan.total == 0
     {
-        if plan.parallelism != 0
-            || !planned_shards.is_empty()
-            || !shard_names.is_empty()
-            || !plan_table.is_empty()
-            || !failed_list.trim().is_empty()
-        {
-            return Err(AppError::Integrity(
-                "zero-case rerun has shard or failure evidence".to_owned(),
-            ));
-        }
-        if !plan.carry_forward {
-            return Err(AppError::Unavailable("zero-case rerun changed or removed source cases; no carried-forward verdict can be established".to_owned()));
-        }
+        check_carried_forward(
+            &ZeroCaseRerun {
+                plan: &plan,
+                planned_shards: &planned_shards,
+                published_shards: &shard_names,
+                plan_table: &plan_table,
+                failed_list: &failed_list,
+                verdict: &verdict,
+            },
+            request.ci_state,
+            source_summary,
+        )?;
         let verdict = verdict.trim();
-        if verdict != source_summary.verdict
-            || !(request.ci_state.eq_ignore_ascii_case("unreported")
-                || request
-                    .ci_state
-                    .eq_ignore_ascii_case(&source_summary.ci_state))
-        {
-            return Err(AppError::Integrity(
-                "carried-forward status and verdict disagree with the validated source suite"
-                    .to_owned(),
-            ));
-        }
         let summary = SuiteSummary {
             schema_version: 3,
             suite: request.suite.job_name().to_owned(),
@@ -1334,23 +1285,8 @@ async fn collect_rerun_source(
         write_string_immutable(&metadata, &String::from_utf8_lossy(&bytes))?;
         bytes
     };
-    let source: ActionRun = serde_json::from_slice(&bytes)?;
-    let current: ActionRun = serde_json::from_slice(request.run_json)?;
-    if source.id != source_run || source.run_attempt == 0 {
-        return Err(AppError::Integrity(
-            "rerun source metadata has inconsistent execution identity".to_owned(),
-        ));
-    }
-    match (source.updated_at, current.created_at) {
-        (Some(finished), Some(started))
-            if source.status.as_deref() == Some("completed") && finished <= started => {}
-        _ => {
-            return Err(AppError::Unavailable(format!(
-                "source run {source_run} attempt {} is unfinished, was updated after rerun {} started, or lacks timestamps; its source attempt cannot be established",
-                source.run_attempt, request.run_id
-            )));
-        }
-    }
+    let source_attempt =
+        check_rerun_source_run(&bytes, request.run_json, source_run, request.run_id)?;
     let mut lineage = request.lineage.to_vec();
     lineage.push(request.run_id);
     let source_context = Mutex::new(None);
@@ -1360,7 +1296,7 @@ async fn collect_rerun_source(
     let summary = Box::pin(collect_suite(SuiteRequest {
         suite: request.suite,
         run_id: source_run,
-        attempt: source.run_attempt,
+        attempt: source_attempt,
         commit: request.commit,
         ci_state: "unreported",
         artifact_base: request.artifact_base,
@@ -1380,14 +1316,10 @@ async fn collect_rerun_source(
     .await
     .map_err(|error| AppError::RerunSource {
         run_id: source_run,
-        attempt: source.run_attempt,
+        attempt: source_attempt,
         source: Box::new(error),
     })?;
-    let relative = PathBuf::from(format!(
-        "providers/github-actions/runs/{source_run}/attempts/{}/{}/summary.json",
-        source.run_attempt,
-        request.suite.job_name()
-    ));
+    let relative = execution_path(source_run, source_attempt, request.suite).join("summary.json");
     let summary_bytes = fs::read(request.evidence_dir.join(&relative))
         .map_err(|source| AppError::storage(&relative, source))?;
     let plan = parse_split_meta(&read_bounded_text(
@@ -1403,7 +1335,221 @@ async fn collect_rerun_source(
             .join("raw/plan/split.meta"),
         MAX_INDEX_BYTES,
     )?)?;
-    if plan.engine_sha.as_deref() != Some(request.commit)
+    check_rerun_plan(&plan, &source_plan, request.commit)?;
+    Ok((
+        summary,
+        RerunSource {
+            mode: RerunMode::Partial,
+            run_id: source_run,
+            attempt: source_attempt,
+            summary: relative,
+            summary_sha256: hex::encode(Sha256::digest(&summary_bytes)),
+        },
+    ))
+}
+
+pub(crate) fn execution_path(run_id: u64, attempt: u64, suite: Suite) -> PathBuf {
+    PathBuf::from(format!(
+        "providers/github-actions/runs/{run_id}/attempts/{attempt}/{}",
+        suite.job_name()
+    ))
+}
+
+pub(crate) struct RetainedSummary {
+    pub summary: SuiteSummary,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct VerifiedRerunSource {
+    pub run_id: u64,
+    pub attempt: u64,
+    pub mode: RerunMode,
+    pub path: PathBuf,
+}
+
+pub(crate) struct VerifiedSuite {
+    pub summary: SuiteSummary,
+    pub sources: Vec<VerifiedRerunSource>,
+}
+
+/// Validates one published suite execution and its rerun lineage from retained
+/// files only. Collection reuse and `verify` share this check.
+pub(crate) fn verify_retained_suite(
+    evidence_dir: &Path,
+    suite: Suite,
+    run_id: u64,
+    attempt: u64,
+    commit: &str,
+    include_binaries: bool,
+) -> Result<VerifiedSuite, AppError> {
+    let retained = validate_retained_summary(
+        evidence_dir,
+        suite,
+        run_id,
+        attempt,
+        commit,
+        include_binaries,
+    )?;
+    let mut sources = Vec::new();
+    let mut lineage = vec![run_id];
+    let mut child = (run_id, attempt, retained.summary.clone());
+    while let Some(link) = child.2.rerun.clone() {
+        if lineage.contains(&link.run_id) || lineage.len() >= 32 {
+            return Err(AppError::Integrity(
+                "rerun source lineage is cyclic or exceeds 32 runs".to_owned(),
+            ));
+        }
+        let source = verify_rerun_link(
+            evidence_dir,
+            suite,
+            (child.0, child.1, &child.2),
+            &link,
+            commit,
+        )
+        .map_err(|error| AppError::RerunSource {
+            run_id: link.run_id,
+            attempt: link.attempt,
+            source: Box::new(error),
+        })?;
+        sources.push(VerifiedRerunSource {
+            run_id: link.run_id,
+            attempt: link.attempt,
+            mode: link.mode.clone(),
+            path: link.summary.clone(),
+        });
+        lineage.push(link.run_id);
+        child = (link.run_id, link.attempt, source);
+    }
+    Ok(VerifiedSuite {
+        summary: retained.summary,
+        sources,
+    })
+}
+
+fn verify_rerun_link(
+    evidence_dir: &Path,
+    suite: Suite,
+    (child_run, child_attempt, child): (u64, u64, &SuiteSummary),
+    link: &RerunSource,
+    commit: &str,
+) -> Result<SuiteSummary, AppError> {
+    if child.commit.as_deref() != Some(commit) {
+        return Err(AppError::Integrity(
+            "rerun summary does not name the selected Engine commit".to_owned(),
+        ));
+    }
+    let source_execution = execution_path(link.run_id, link.attempt, suite);
+    if link.summary != source_execution.join("summary.json") {
+        return Err(AppError::Integrity(format!(
+            "rerun source path {} is not the derived path for its run, attempt, and suite",
+            link.summary.display()
+        )));
+    }
+    let source = validate_retained_summary(
+        evidence_dir,
+        suite,
+        link.run_id,
+        link.attempt,
+        commit,
+        false,
+    )?;
+    let child_raw = execution_path(child_run, child_attempt, suite).join("raw");
+    let source_attempt = check_rerun_source_run(
+        &read_retained(evidence_dir, &child_raw.join("github/rerun-source.json"))?,
+        &read_retained(evidence_dir, &child_raw.join("github/run.json"))?,
+        link.run_id,
+        child_run,
+    )?;
+    if source.sha256 != link.summary_sha256 || source_attempt != link.attempt {
+        return Err(AppError::Integrity(
+            "stored rerun source reference disagrees with its validated source summary".to_owned(),
+        ));
+    }
+    let text = |name: &str| retained_text(evidence_dir, &child_raw.join(name));
+    let plan = parse_split_meta(&text("plan/split.meta")?)?;
+    let source_plan = parse_split_meta(&retained_text(
+        evidence_dir,
+        &source_execution.join("raw/plan/split.meta"),
+    )?)?;
+    check_rerun_plan(&plan, &source_plan, commit)?;
+    match link.mode {
+        RerunMode::Partial if plan.total > 0 => {}
+        RerunMode::CarriedForward if plan.total == 0 => {
+            let planned_shards = directory_entries(&text("indexes/planned-shards.html")?, false)?
+                .into_iter()
+                .filter_map(|name| name.strip_suffix(".list").map(ToOwned::to_owned))
+                .collect::<Vec<_>>();
+            let plan_table_text = text("plan/plan.tsv")?;
+            let plan_table = if plan_table_text.trim().is_empty() {
+                BTreeMap::new()
+            } else {
+                parse_plan_table(&plan_table_text)?
+            };
+            let verdict = text("collect/verdict")?;
+            check_carried_forward(
+                &ZeroCaseRerun {
+                    plan: &plan,
+                    planned_shards: &planned_shards,
+                    published_shards: &directory_entries(&text("indexes/shards.html")?, true)?,
+                    plan_table: &plan_table,
+                    failed_list: &text("collect/failed.list")?,
+                    verdict: &verdict,
+                },
+                &child.ci_state,
+                &source.summary,
+            )?;
+            if child.verdict != verdict.trim()
+                || child.ci_state != source.summary.ci_state
+                || child.counts != TestCounts::default()
+                || !child.shards.is_empty()
+                || !child.failures.is_empty()
+            {
+                return Err(AppError::Integrity(
+                    "carried-forward summary disagrees with its zero-case plan or validated source"
+                        .to_owned(),
+                ));
+            }
+        }
+        _ => {
+            return Err(AppError::Integrity(
+                "rerun mode disagrees with the retained plan total".to_owned(),
+            ));
+        }
+    }
+    Ok(source.summary)
+}
+
+/// Requires the source run to have finished before the rerun started, which
+/// bounds the source attempt the producer could have read.
+fn check_rerun_source_run(
+    source_metadata: &[u8],
+    child_run: &[u8],
+    source_run: u64,
+    child_run_id: u64,
+) -> Result<u64, AppError> {
+    let source: ActionRun = serde_json::from_slice(source_metadata)?;
+    let current: ActionRun = serde_json::from_slice(child_run)?;
+    if source.id != source_run || source.run_attempt == 0 {
+        return Err(AppError::Integrity(
+            "rerun source metadata has inconsistent execution identity".to_owned(),
+        ));
+    }
+    match (source.updated_at, current.created_at) {
+        (Some(finished), Some(started))
+            if source.status.as_deref() == Some("completed") && finished <= started =>
+        {
+            Ok(source.run_attempt)
+        }
+        _ => Err(AppError::Unavailable(format!(
+            "source run {source_run} attempt {} is unfinished, was updated after rerun {child_run_id} started, or lacks timestamps; its source attempt cannot be established",
+            source.run_attempt
+        ))),
+    }
+}
+
+fn check_rerun_plan(plan: &SqlPlan, source_plan: &SqlPlan, commit: &str) -> Result<(), AppError> {
+    if plan.engine_sha.as_deref() != Some(commit)
         || plan.rerun_since.as_deref() != Some(source_plan.testcase_sha.as_str())
     {
         return Err(AppError::Integrity(
@@ -1411,35 +1557,43 @@ async fn collect_rerun_source(
                 .to_owned(),
         ));
     }
-    Ok((
-        summary,
-        RerunSource {
-            mode: RerunMode::Partial,
-            run_id: source_run,
-            attempt: source.run_attempt,
-            summary: relative,
-            summary_sha256: hex::encode(Sha256::digest(&summary_bytes)),
-        },
-    ))
+    Ok(())
 }
 
-async fn validate_rerun_source(
-    request: &SuiteRequest<'_>,
-    source: &RerunSource,
+struct ZeroCaseRerun<'a> {
+    plan: &'a SqlPlan,
+    planned_shards: &'a [String],
+    published_shards: &'a [String],
+    plan_table: &'a BTreeMap<String, u64>,
+    failed_list: &'a str,
+    verdict: &'a str,
+}
+
+fn check_carried_forward(
+    rerun: &ZeroCaseRerun<'_>,
+    ci_state: &str,
+    source: &SuiteSummary,
 ) -> Result<(), AppError> {
-    let raw = request.evidence_dir.join(format!(
-        "providers/github-actions/runs/{}/attempts/{}/{}/raw",
-        request.run_id,
-        request.attempt,
-        request.suite.job_name()
-    ));
-    let (_, expected) = collect_rerun_source(request, source.run_id, &raw).await?;
-    if source.attempt != expected.attempt
-        || source.summary != expected.summary
-        || source.summary_sha256 != expected.summary_sha256
+    if rerun.plan.parallelism != 0
+        || !rerun.planned_shards.is_empty()
+        || !rerun.published_shards.is_empty()
+        || !rerun.plan_table.is_empty()
+        || !rerun.failed_list.trim().is_empty()
     {
         return Err(AppError::Integrity(
-            "stored rerun source reference disagrees with its validated source summary".to_owned(),
+            "zero-case rerun has shard or failure evidence".to_owned(),
+        ));
+    }
+    if !rerun.plan.carry_forward {
+        return Err(AppError::Unavailable("zero-case rerun changed or removed source cases; no carried-forward verdict can be established".to_owned()));
+    }
+    if rerun.verdict.trim() != source.verdict
+        || !(ci_state.eq_ignore_ascii_case("unreported")
+            || ci_state.eq_ignore_ascii_case(&source.ci_state))
+    {
+        return Err(AppError::Integrity(
+            "carried-forward status and verdict disagree with the validated source suite"
+                .to_owned(),
         ));
     }
     Ok(())
@@ -2670,16 +2824,218 @@ fn write_raw_index(
     )
 }
 
+pub(crate) fn validate_retained_summary(
+    evidence_dir: &Path,
+    suite: Suite,
+    run_id: u64,
+    attempt: u64,
+    commit: &str,
+    include_binaries: bool,
+) -> Result<RetainedSummary, AppError> {
+    let execution = execution_path(run_id, attempt, suite);
+    let summary_path = evidence_dir.join(&execution).join("summary.json");
+    if !evidence_dir
+        .join(&execution)
+        .join("raw/index.json")
+        .exists()
+    {
+        return Err(AppError::Integrity(format!(
+            "stored summary has no raw evidence index: {}",
+            summary_path.display()
+        )));
+    }
+    let indexed_digest = validate_raw_index(
+        evidence_dir,
+        &execution.join("raw"),
+        run_id,
+        attempt,
+        suite.job_name(),
+    )?;
+    let bytes = read_retained(evidence_dir, &execution.join("summary.json"))?;
+    validate_summary_schema(&bytes)?;
+    let sha256 = hex::encode(Sha256::digest(&bytes));
+    if indexed_digest != sha256 {
+        return Err(AppError::Integrity(format!(
+            "stored summary digest disagrees with the raw evidence index: {}",
+            summary_path.display()
+        )));
+    }
+    let summary: SuiteSummary =
+        serde_json::from_slice(&bytes).map_err(|source| AppError::Json {
+            endpoint: summary_path.display().to_string(),
+            source,
+        })?;
+    if summary.run_id != run_id
+        || summary.attempt != attempt
+        || summary.suite != suite.job_name()
+        || summary
+            .commit
+            .as_deref()
+            .is_some_and(|summary_commit| summary_commit != commit)
+        || summary
+            .shards
+            .iter()
+            .any(|shard| !shard.build.sha.eq_ignore_ascii_case(commit))
+    {
+        return Err(AppError::Integrity(format!(
+            "stored immutable summary does not match {suite} run {run_id} attempt {attempt}"
+        )));
+    }
+    check_summary_counts(&summary)?;
+    check_failure_files(evidence_dir, &execution, &summary)?;
+    if include_binaries {
+        validate_binary_inventory(evidence_dir, &execution)?;
+    }
+    Ok(RetainedSummary { summary, sha256 })
+}
+
+fn check_summary_counts(summary: &SuiteSummary) -> Result<(), AppError> {
+    let counts = &summary.counts;
+    let total = |values: &[u64]| values.iter().map(|value| u128::from(*value)).sum::<u128>();
+    let recorded = |result: &str| {
+        summary
+            .failures
+            .iter()
+            .filter(|failure| failure.result == result)
+            .count() as u64
+    };
+    if u128::from(counts.tests)
+        != total(&[
+            counts.passed,
+            counts.failures,
+            counts.errors,
+            counts.skipped,
+        ])
+        || u128::from(counts.planned) != total(&[counts.run, counts.unrun, counts.skipped])
+        || recorded("failure") != counts.failures
+        || recorded("error") != counts.errors
+        || summary.failures.len() as u128 != total(&[counts.failures, counts.errors])
+    {
+        return Err(AppError::Integrity(format!(
+            "stored summary counts do not reconcile for {} run {} attempt {}",
+            summary.suite, summary.run_id, summary.attempt
+        )));
+    }
+    Ok(())
+}
+
+fn check_failure_files(
+    evidence_dir: &Path,
+    execution: &Path,
+    summary: &SuiteSummary,
+) -> Result<(), AppError> {
+    let mut seen = BTreeSet::new();
+    for failure in &summary.failures {
+        let id = &failure.stable_id;
+        let message_path = PathBuf::from(format!("failures/{id}/message.txt"));
+        let diff_path = PathBuf::from(format!("failures/{id}/diff.txt"));
+        let extracted = failure.diff_extraction == "extracted";
+        if *id != stable_test_id(&failure.name)
+            || !seen.insert(id.clone())
+            || failure.message_path != message_path
+            || failure.diff_path.as_ref() != extracted.then_some(&diff_path)
+        {
+            return Err(AppError::Integrity(format!(
+                "stored failure record has a non-canonical identity or path: {id}"
+            )));
+        }
+        let metadata = read_retained(
+            evidence_dir,
+            &execution.join(format!("failures/{id}/metadata.json")),
+        )?;
+        validate_json_schema(
+            "failure-v2",
+            include_str!("../schema/failure-v2.schema.json"),
+            &metadata,
+        )?;
+        let expected = serde_json::to_value(FailureMetadata {
+            schema_version: 2,
+            stable_id: &failure.stable_id,
+            name: &failure.name,
+            shard: &failure.shard,
+            class_name: &failure.class_name,
+            duration_seconds: failure.duration_seconds,
+            result: &failure.result,
+            diff_extraction: &failure.diff_extraction,
+            message_path: &failure.message_path,
+            diff_path: &failure.diff_path,
+        })?;
+        if serde_json::from_slice::<serde_json::Value>(&metadata)? != expected {
+            return Err(AppError::Integrity(format!(
+                "stored failure metadata disagrees with its summary record: {id}"
+            )));
+        }
+        retained_path(evidence_dir, &execution.join(&message_path))?;
+        if extracted {
+            retained_path(evidence_dir, &execution.join(&diff_path))?;
+        }
+    }
+    Ok(())
+}
+
+/// Resolves a retained file beneath `root`, rejecting unsafe relative paths
+/// and any symlinked component so evidence cannot escape its directory.
+fn retained_path(root: &Path, relative: &Path) -> Result<PathBuf, AppError> {
+    let mut path = root.to_path_buf();
+    let mut last = None;
+    for component in relative.components() {
+        let std::path::Component::Normal(name) = component else {
+            return Err(AppError::Integrity(format!(
+                "retained evidence path is unsafe: {}",
+                relative.display()
+            )));
+        };
+        path.push(name);
+        let metadata = fs::symlink_metadata(&path).map_err(|error| {
+            AppError::Integrity(format!(
+                "read retained evidence {}: {error}",
+                relative.display()
+            ))
+        })?;
+        if metadata.file_type().is_symlink() {
+            return Err(AppError::Integrity(format!(
+                "retained evidence path contains a symbolic link: {}",
+                relative.display()
+            )));
+        }
+        last = Some(metadata);
+    }
+    if !last.is_some_and(|metadata| metadata.is_file()) {
+        return Err(AppError::Integrity(format!(
+            "retained evidence is not a regular file: {}",
+            relative.display()
+        )));
+    }
+    Ok(path)
+}
+
+pub(crate) fn read_retained(root: &Path, relative: &Path) -> Result<Vec<u8>, AppError> {
+    let path = retained_path(root, relative)?;
+    fs::read(&path).map_err(|error| {
+        AppError::Integrity(format!(
+            "read retained evidence {}: {error}",
+            relative.display()
+        ))
+    })
+}
+
+fn retained_text(root: &Path, relative: &Path) -> Result<String, AppError> {
+    String::from_utf8(read_retained(root, relative)?).map_err(|_| {
+        AppError::Integrity(format!(
+            "retained evidence is not UTF-8 text: {}",
+            relative.display()
+        ))
+    })
+}
+
 fn validate_raw_index(
+    evidence_dir: &Path,
     raw_dir: &Path,
     run_id: u64,
     attempt: u64,
     suite: &str,
 ) -> Result<String, AppError> {
-    let index_path = raw_dir.join("index.json");
-    let bytes = fs::read(&index_path).map_err(|error| {
-        AppError::Integrity(format!("read retained raw evidence index: {error}"))
-    })?;
+    let bytes = read_retained(evidence_dir, &raw_dir.join("index.json"))?;
     validate_json_schema(
         "raw-evidence-index-v2",
         include_str!("../schema/raw-evidence-index-v2.schema.json"),
@@ -2711,13 +3067,7 @@ fn validate_raw_index(
                 file.path.display()
             )));
         }
-        let path = raw_dir.join(&file.path);
-        let retained = fs::read(&path).map_err(|error| {
-            AppError::Integrity(format!(
-                "read retained raw evidence {}: {error}",
-                file.path.display()
-            ))
-        })?;
+        let retained = read_retained(evidence_dir, &raw_dir.join(&file.path))?;
         if retained.len() as u64 != file.size_bytes
             || hex::encode(Sha256::digest(&retained)) != file.sha256
         {
@@ -2730,9 +3080,8 @@ fn validate_raw_index(
     Ok(index.summary_sha256)
 }
 
-fn validate_binary_inventory(suite_dir: &Path) -> Result<(), AppError> {
-    let path = suite_dir.join("binary-inventory.json");
-    let bytes = fs::read(&path).map_err(|source| AppError::storage(&path, source))?;
+fn validate_binary_inventory(evidence_dir: &Path, execution: &Path) -> Result<(), AppError> {
+    let bytes = read_retained(evidence_dir, &execution.join("binary-inventory.json"))?;
     validate_json_schema(
         "binary-inventory-v2",
         include_str!("../schema/binary-inventory-v2.schema.json"),
@@ -2753,10 +3102,6 @@ fn validate_binary_inventory(suite_dir: &Path) -> Result<(), AppError> {
                 file.shard, file.name
             )));
         }
-        let destination = suite_dir
-            .join("binaries")
-            .join(&file.shard)
-            .join(&file.name);
         if file.state == "downloaded" {
             let (Some(size), Some(digest)) = (file.size_bytes, file.sha256.as_deref()) else {
                 return Err(AppError::Integrity(format!(
@@ -2770,6 +3115,13 @@ fn validate_binary_inventory(suite_dir: &Path) -> Result<(), AppError> {
                     file.shard, file.name
                 )));
             }
+            let destination = retained_path(
+                evidence_dir,
+                &execution
+                    .join("binaries")
+                    .join(&file.shard)
+                    .join(&file.name),
+            )?;
             let (actual_size, actual_digest) = file_size_and_sha256(&destination)?;
             if actual_size != size || actual_digest != digest {
                 return Err(AppError::Integrity(format!(
@@ -2787,7 +3139,11 @@ fn validate_binary_inventory(suite_dir: &Path) -> Result<(), AppError> {
     Ok(())
 }
 
-fn validate_json_schema(label: &str, schema: &str, bytes: &[u8]) -> Result<(), AppError> {
+pub(crate) fn validate_json_schema(
+    label: &str,
+    schema: &str,
+    bytes: &[u8],
+) -> Result<(), AppError> {
     let schema: serde_json::Value = serde_json::from_str(schema)
         .map_err(|error| AppError::Integrity(format!("parse embedded {label} schema: {error}")))?;
     let instance: serde_json::Value = serde_json::from_slice(bytes).map_err(|error| {

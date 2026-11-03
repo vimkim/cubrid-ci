@@ -19,6 +19,29 @@ async fn main() -> ExitCode {
         return ExitCode::from(error.exit_code());
     }
 
+    if let Commands::Verify(args) = &cli.command {
+        return match cubrid_ci::verify::run(args) {
+            Ok(report) => {
+                if cli.json {
+                    match serde_json::to_string_pretty(&report) {
+                        Ok(json) => println!("{json}"),
+                        Err(error) => {
+                            eprintln!("error: failed to serialize verification report: {error}");
+                            return ExitCode::from(6);
+                        }
+                    }
+                } else {
+                    println!("{}", report.human_summary());
+                }
+                ExitCode::from(report.exit_code())
+            }
+            Err(error) => {
+                emit_error(&cli, &error);
+                ExitCode::from(error.exit_code())
+            }
+        };
+    }
+
     if let Commands::Doctor(args) = &cli.command {
         let config = match ResolvedConfig::load(ConfigOverride {
             data_dir: args.data_dir.clone(),
@@ -108,7 +131,7 @@ async fn main() -> ExitCode {
         };
     }
 
-    unreachable!("clap requires one of status, collect, or doctor")
+    unreachable!("clap requires a known subcommand")
 }
 
 fn emit_error(cli: &Cli, error: &cubrid_ci::AppError) {

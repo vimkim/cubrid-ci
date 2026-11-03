@@ -48,6 +48,13 @@ cubrid-ci collect 7990 --commit <sha> --fetch-concurrency 40
 # Opt in to bounded artifacts from abnormal shards.
 cubrid-ci collect 7990 --commit <sha> --include-binaries \
   --max-binary-bytes 268435456 --max-binary-total-bytes 536870912
+
+# Verify a saved collection result and its retained evidence offline.
+cubrid-ci verify result.json --pr 7990 --pr-head <sha> --json
+
+# Locate the interrupted observation of a collection that printed nothing.
+cubrid-ci verify empty.json --pr 7990 --pr-head <sha> \
+  --since 2026-11-03T08:00:00Z --json
 ```
 
 All commands accept `--json`. A fully collected red suite exits successfully:
@@ -125,6 +132,32 @@ Both commands accept repeated `--suite`, `--data-dir`, `--artifact-base`,
 `--fetch-concurrency`, and `--json`. They observe existing CI once; they do not
 trigger or wait for CI. Signature matching and causal interpretation remain
 in the analysis skills.
+
+## Verifying retained evidence
+
+`verify` reads only the evidence root. It never calls `gh`, the status command,
+or the evidence server, and it writes nothing. Pass the saved stdout of
+`collect`, `collect-commit`, or `collect-base`, the same `--suite` filters, and
+the pinned PR and head. For a baseline, the pins must match the recorded
+baseline relationship.
+
+The command selects the unique observation whose terminal command equals the
+saved result. If the result is empty or a structured error, `--pr`,
+`--pr-head`, and `--since` select the unique PR-head observation started at or
+after that time; it can be interrupted or failed. It then checks the
+observation schemas and identities, binary-budget arithmetic, manifest
+agreement, and every requested completed suite: raw index, digests and lengths,
+summary schema and identity, counts, failure files, binary inventory, and the
+complete rerun lineage. Symlinked or escaping paths are rejected. Collection
+reuses the same suite check before it trusts a warm summary.
+
+The [`verification-v1`](schema/verification-v1.schema.json) report has an
+`assessment` with the observation, manifest, summary, identity, and suite-set
+facts, a per-suite result, an exact-baseline state for `collect-base` bundles,
+and issues. Exit 0 means fully verified evidence, 3 means unfinished,
+interrupted, failed, unselected, partial, or superseded evidence, 4 means a
+contradiction in retained evidence, and 2 means invalid input. Verification
+establishes integrity only; it never establishes CI causality.
 
 ## Evidence storage
 

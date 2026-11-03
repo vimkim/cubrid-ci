@@ -1,0 +1,5 @@
+# Verify retained evidence offline
+
+Analysis callers had to restate the collector's integrity rules in prose before trusting a retained bundle. Add an offline `verify` command that selects the observation behind a saved collector result, or the unique interrupted or failed PR-head observation after a caller-supplied start time, and checks it with the collector's own validators. ADR-0002 still holds: `verify` reports evidence facts and an exact-baseline state, while report decisions, signature comparison, and causal analysis stay in the analysis skills.
+
+Warm-suite reuse during collection and `verify` share one retained-suite check, including counts, failure files, symlink-free paths, and the offline rerun lineage. A rerun whose retained source is missing therefore fails instead of being refetched, consistent with ADR-0011's treatment of contradictory immutable evidence. A root manifest that a later observation replaced is reported as superseded rather than tampered, but it still prevents a fully verified result.
