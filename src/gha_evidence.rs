@@ -2931,6 +2931,7 @@ pub(crate) fn validate_retained_summary(
         )));
     }
     check_summary_counts(&summary)?;
+    check_outcome(&summary)?;
     check_failure_files(evidence_dir, &execution, &summary)?;
     if include_binaries {
         validate_binary_inventory(evidence_dir, &execution)?;
@@ -2963,6 +2964,40 @@ fn check_summary_counts(summary: &SuiteSummary) -> Result<(), AppError> {
         return Err(AppError::Integrity(format!(
             "stored summary counts do not reconcile for {} run {} attempt {}",
             summary.suite, summary.run_id, summary.attempt
+        )));
+    }
+    Ok(())
+}
+
+/// Requires the recorded verdict, CI state, and failure list to tell one story.
+/// A carried-forward summary copies its verdict and CI state from its source and
+/// records no failures. Only `verify` checks those against the source, through
+/// `verify_rerun_link`; warm reuse does not.
+fn check_outcome(summary: &SuiteSummary) -> Result<(), AppError> {
+    if matches!(
+        summary.rerun.as_ref().map(|link| &link.mode),
+        Some(RerunMode::CarriedForward)
+    ) {
+        return Ok(());
+    }
+    let failed = match (summary.verdict.as_str(), summary.ci_state.as_str()) {
+        ("pass", "success") => false,
+        ("fail", "failure") => true,
+        _ => {
+            return Err(AppError::Integrity(format!(
+                "stored summary verdict {} and CI state {} disagree for {} run {} attempt {}",
+                summary.verdict, summary.ci_state, summary.suite, summary.run_id, summary.attempt
+            )));
+        }
+    };
+    if failed == summary.failures.is_empty() {
+        return Err(AppError::Integrity(format!(
+            "stored summary verdict {} disagrees with its {} recorded failures for {} run {} attempt {}",
+            summary.verdict,
+            summary.failures.len(),
+            summary.suite,
+            summary.run_id,
+            summary.attempt
         )));
     }
     Ok(())
@@ -3042,6 +3077,48 @@ fn check_failure_files(
                 "stored failure message or diff does not match its retained JUnit record: {id}"
             )));
         }
+    }
+    check_failure_sets(evidence_dir, execution, summary, junit)
+}
+
+/// Requires the failed `(shard, name)` pairs of the retained failed-case list
+/// and of every shard's indexed JUnit to equal the summary's failure records.
+fn check_failure_sets(
+    evidence_dir: &Path,
+    execution: &Path,
+    summary: &SuiteSummary,
+    mut junit: BTreeMap<String, BTreeMap<String, (&'static str, String)>>,
+) -> Result<(), AppError> {
+    let recorded: BTreeSet<(String, String)> = summary
+        .failures
+        .iter()
+        .map(|failure| (failure.shard.clone(), failure.name.clone()))
+        .collect();
+    let listed: BTreeSet<(String, String)> = parse_failed_list(&retained_text(
+        evidence_dir,
+        &execution.join("raw/collect/failed.list"),
+    )?)?
+    .into_iter()
+    .collect();
+    if listed != recorded {
+        return Err(AppError::Integrity(
+            "stored summary failures disagree with the retained failed-case list".to_owned(),
+        ));
+    }
+    for shard in &summary.shards {
+        if !junit.contains_key(&shard.index) {
+            let cases = retained_junit_failures(evidence_dir, execution, summary, &shard.index)?;
+            junit.insert(shard.index.clone(), cases);
+        }
+    }
+    let from_junit: BTreeSet<(String, String)> = junit
+        .into_iter()
+        .flat_map(|(shard, cases)| cases.into_keys().map(move |name| (shard.clone(), name)))
+        .collect();
+    if from_junit != recorded {
+        return Err(AppError::Integrity(
+            "stored summary failures disagree with the retained JUnit failures".to_owned(),
+        ));
     }
     Ok(())
 }

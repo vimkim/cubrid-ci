@@ -116,6 +116,83 @@ async fn failure_files_must_exist_and_match_the_summary() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn rewritten_verdict_must_agree_with_ci_state_and_recorded_failures() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let suite = fixture.suite_dir(&result);
+    let summary = fs::read(suite.join("summary.json")).unwrap();
+
+    for (field, value, fragment) in [
+        (
+            "verdict",
+            "pass",
+            "verdict pass and CI state failure disagree",
+        ),
+        (
+            "ci_state",
+            "success",
+            "verdict fail and CI state success disagree",
+        ),
+    ] {
+        rewrite_json(&suite.join("summary.json"), |summary| {
+            summary[field] = json!(value);
+        });
+        reindex_summary(&suite);
+
+        let (code, report) = fixture.verify(&result, &[]);
+
+        assert_eq!(code, Some(4), "{field}: {report:#}");
+        assert_issue(&report, "test_sql", "integrity", fragment);
+        fs::write(suite.join("summary.json"), &summary).unwrap();
+        reindex_summary(&suite);
+    }
+
+    rewrite_json(&suite.join("summary.json"), |summary| {
+        summary["verdict"] = json!("pass");
+        summary["ci_state"] = json!("success");
+    });
+    reindex_summary(&suite);
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_issue(
+        &report,
+        "test_sql",
+        "integrity",
+        "disagrees with its 1 recorded",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn summary_failures_must_match_the_retained_failed_list_and_junit() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let suite = fixture.suite_dir(&result);
+    forget_recorded_failure(&suite);
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_eq!(report["suites"]["test_sql"]["summary"], "invalid");
+    assert_issue(
+        &report,
+        "test_sql",
+        "integrity",
+        "retained failed-case list",
+    );
+
+    let raw = suite.join("raw");
+    fs::write(raw.join("collect/failed.list"), b"").unwrap();
+    reindex_raw(&raw, "collect/failed.list");
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_issue(&report, "test_sql", "integrity", "retained JUnit failures");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn failure_files_from_another_derivation_verify_offline() {
     let fixture = SqlFixture::new().await;
     let result = fixture.collect_ok();
@@ -1202,6 +1279,22 @@ fn point_record_at(record: &mut Value, id: &str) {
     record["stable_id"] = json!(id);
     record["message_path"] = json!(format!("failures/{id}/message.txt"));
     record["diff_path"] = json!(format!("failures/{id}/diff.txt"));
+}
+
+/// Drops the only recorded failure the way a coordinated edit would: counts,
+/// verdict, CI state, and the raw index digest all agree afterwards.
+fn forget_recorded_failure(suite: &Path) {
+    rewrite_json(&suite.join("summary.json"), |summary| {
+        let dropped = summary["failures"].as_array().unwrap().len() as u64;
+        summary["failures"] = json!([]);
+        let counts = &mut summary["counts"];
+        counts["passed"] = json!(counts["passed"].as_u64().unwrap() + dropped);
+        counts["failures"] = json!(0);
+        counts["errors"] = json!(0);
+        summary["verdict"] = json!("pass");
+        summary["ci_state"] = json!("success");
+    });
+    reindex_summary(suite);
 }
 
 fn reindex_raw(raw: &Path, relative: &str) {
