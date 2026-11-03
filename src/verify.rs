@@ -200,7 +200,9 @@ impl Findings {
     fn error(&mut self, scope: &str, error: &AppError) {
         let kind = match error.kind() {
             ExitKind::Unavailable => IssueKind::Unavailable,
-            ExitKind::Storage if !matches!(error, AppError::Serialization(_)) => IssueKind::Storage,
+            ExitKind::Storage if !matches!(error.root(), AppError::Serialization(_)) => {
+                IssueKind::Storage
+            }
             _ => IssueKind::Integrity,
         };
         self.add(scope, kind, error.to_string());

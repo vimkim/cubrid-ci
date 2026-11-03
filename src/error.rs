@@ -97,6 +97,15 @@ pub enum AppError {
 }
 
 impl AppError {
+    /// The error beneath wrappers that only add context.
+    pub fn root(&self) -> &AppError {
+        match self {
+            Self::Shared(error) => error.root(),
+            Self::RerunSource { source, .. } | Self::Baseline { source, .. } => source.root(),
+            _ => self,
+        }
+    }
+
     pub fn kind(&self) -> ExitKind {
         match self {
             Self::Shared(error) => error.kind(),

@@ -412,6 +412,25 @@ async fn tampered_rerun_source_invalidates_only_its_suite() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn malformed_json_in_a_rerun_source_is_an_integrity_failure() {
+    let fixture = RerunFixture::new().await;
+    let (_, result) = fixture.collect(&[]);
+    let root = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let source = root.join("providers/github-actions/runs/40323508581/attempts/1/test_shell");
+    append(&source.join("summary.json"), "x");
+
+    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+
+    assert_eq!(code, Some(4), "{report:#}");
+    assert_issue(
+        &report,
+        "test_shell",
+        "integrity",
+        "rerun source run 40323508581 attempt 1",
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn carried_forward_summary_must_keep_the_source_verdict() {
     let fixture = RerunFixture::new().await;
     let (_, result) = fixture.collect(&[]);
