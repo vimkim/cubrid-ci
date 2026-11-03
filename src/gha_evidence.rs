@@ -1029,6 +1029,11 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             _ => unreachable!("failure map contains only failed or errored cases"),
         };
         let stable_id = stable_test_id(&name);
+        if !is_safe_stable_id(&stable_id) {
+            return Err(AppError::Integrity(format!(
+                "stable id {stable_id:?} for {name} is not a safe path segment"
+            )));
+        }
         let failure_dir = suite_dir.join("failures").join(&stable_id);
         let message_path = PathBuf::from(format!("failures/{stable_id}/message.txt"));
         let diff = extract_diff(&message).map(|diff| format!("{diff}\n"));

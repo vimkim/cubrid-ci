@@ -27,6 +27,9 @@ pub fn stable_test_id(name: &str) -> String {
 }
 
 /// Whether a retained failure id names one directory beneath `failures/`.
+///
+/// Loosen this rule freely; tightening it rejects evidence that was valid when
+/// written.
 pub fn is_safe_stable_id(id: &str) -> bool {
     !matches!(id, "" | "." | "..")
         && id
@@ -44,7 +47,8 @@ pub fn is_safe_stable_id(id: &str) -> bool {
 /// extraction starts at a marker and trims trailing whitespace. A lone line may
 /// be any substring. Trailing `\r` characters are ignored, because `\r\r\n`
 /// survives `extract_diff`'s single CRLF fold in a form that `lines()` and
-/// `split('\n')` read differently.
+/// `split('\n')` read differently. Loosen this rule freely; tightening it
+/// rejects evidence that was valid when written.
 pub fn is_retained_excerpt(message: &str, retained: &[u8]) -> bool {
     let Some(body) = std::str::from_utf8(retained)
         .ok()
