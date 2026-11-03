@@ -692,6 +692,44 @@ async fn unreadable_evidence_is_a_storage_failure() {
     assert_issue(&report, "test_sql", "storage", "results.xml");
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_observation_files_are_storage_failures() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let snapshot = fixture.snapshot(&result);
+    let observation = only_observation(&snapshot);
+    for name in ["request.json", "result.json"] {
+        let file = observation.join(name);
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read(&file).is_ok() {
+            return;
+        }
+
+        let (code, report) = fixture.verify(&result, &[]);
+
+        fs::set_permissions(&file, fs::Permissions::from_mode(0o644)).unwrap();
+        assert_eq!(code, Some(6), "{name}: {report:#}");
+        assert_issue(&report, "observation", "storage", name);
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn unreadable_observations_directory_is_a_storage_failure() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    let observations = fixture.snapshot(&result).join("observations");
+    fs::set_permissions(&observations, fs::Permissions::from_mode(0o000)).unwrap();
+    if fs::read_dir(&observations).is_ok() {
+        return;
+    }
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    fs::set_permissions(&observations, fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(code, Some(6), "{report:#}");
+    assert_issue(&report, "observation", "storage", "observations");
+}
+
 #[test]
 fn unreadable_result_path_is_an_input_error() {
     let data = tempfile::tempdir().unwrap();

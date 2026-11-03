@@ -198,20 +198,23 @@ impl Findings {
     }
 
     fn error(&mut self, scope: &str, error: &AppError) {
-        let kind = match error.kind() {
-            ExitKind::Unavailable => IssueKind::Unavailable,
-            ExitKind::Storage if !matches!(error.root(), AppError::Serialization(_)) => {
-                IssueKind::Storage
-            }
-            _ => IssueKind::Integrity,
-        };
-        self.add(scope, kind, error.to_string());
+        self.add(scope, issue_kind(error), error.to_string());
     }
 
     fn has_contradiction(&self) -> bool {
         self.0
             .iter()
             .any(|issue| issue.kind != IssueKind::Unavailable)
+    }
+}
+
+fn issue_kind(error: &AppError) -> IssueKind {
+    match error.kind() {
+        ExitKind::Unavailable => IssueKind::Unavailable,
+        ExitKind::Storage if !matches!(error.root(), AppError::Serialization(_)) => {
+            IssueKind::Storage
+        }
+        _ => IssueKind::Integrity,
     }
 }
 
@@ -305,14 +308,7 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
                 "observation",
                 "no collection observation in the evidence snapshot matches this collector result and its pins",
             );
-            for id in unreadable {
-                findings.integrity(
-                    "observation",
-                    format!(
-                        "observation {id} is unreadable or malformed and may be the one this result came from"
-                    ),
-                );
-            }
+            findings.0.extend(unreadable.0);
             return Ok(unselected(Some(snapshot), unselected_identity, findings));
         }
         many => {
@@ -573,46 +569,57 @@ fn request_matches_pins(request: &Value, pins: &Pins) -> bool {
         && suite_set(&request["requested_suites"]).as_ref() == Some(&pins.suites)
 }
 
-/// Readable observations, plus the names of entries whose request or result
-/// cannot be read or parsed.
-fn load_observations(snapshot: &Path) -> (Vec<Observation>, Vec<String>) {
-    let Ok(entries) = fs::read_dir(snapshot.join("observations")) else {
-        return (Vec::new(), Vec::new());
+/// Readable observations, plus findings for an unreadable observations
+/// directory or for entries whose request or result cannot be read or parsed.
+fn load_observations(snapshot: &Path) -> (Vec<Observation>, Findings) {
+    let directory = snapshot.join("observations");
+    let mut unreadable = Findings::default();
+    let mut ids = match fs::read_dir(&directory) {
+        Ok(entries) => entries
+            .filter_map(Result::ok)
+            .map(|entry| entry.file_name().to_string_lossy().into_owned())
+            .collect::<Vec<_>>(),
+        Err(error) => {
+            if error.kind() != std::io::ErrorKind::NotFound {
+                unreadable.error("observation", &AppError::storage(&directory, error));
+            }
+            return (Vec::new(), unreadable);
+        }
     };
+    ids.sort();
     let mut observations = Vec::new();
-    let mut unreadable = Vec::new();
-    for entry in entries.filter_map(Result::ok) {
-        let id = entry.file_name().to_string_lossy().into_owned();
+    for id in ids {
         let relative = Path::new("observations").join(&id);
         let result_path = relative.join("result.json");
-        let request = read_json(snapshot, &relative.join("request.json"));
-        let result = snapshot
-            .join(&result_path)
-            .exists()
-            .then(|| read_json(snapshot, &result_path));
-        match (request, result) {
-            (Some(request), None) => observations.push(Observation {
+        let loaded = read_json(snapshot, &relative.join("request.json")).and_then(|request| {
+            let result = snapshot
+                .join(&result_path)
+                .exists()
+                .then(|| read_json(snapshot, &result_path))
+                .transpose()?;
+            Ok((request, result))
+        });
+        match loaded {
+            Ok((request, result)) => observations.push(Observation {
                 dir: snapshot.join(&relative),
                 id,
                 request,
-                result: None,
+                result,
             }),
-            (Some(request), Some(Some(result))) => observations.push(Observation {
-                dir: snapshot.join(&relative),
-                id,
-                request,
-                result: Some(result),
-            }),
-            _ => unreadable.push(id),
+            Err(error) => unreadable.add(
+                "observation",
+                issue_kind(&error),
+                format!(
+                    "observation {id} is unreadable or malformed and may be the one this result came from: {error}"
+                ),
+            ),
         }
     }
-    observations.sort_by(|left, right| left.id.cmp(&right.id));
-    unreadable.sort();
     (observations, unreadable)
 }
 
-fn read_json(root: &Path, relative: &Path) -> Option<Value> {
-    serde_json::from_slice(&read_retained(root, relative).ok()?).ok()
+fn read_json(root: &Path, relative: &Path) -> Result<Value, AppError> {
+    Ok(serde_json::from_slice(&read_retained(root, relative)?)?)
 }
 
 fn observation_state(observation: &Observation, findings: &mut Findings) -> ObservationState {
