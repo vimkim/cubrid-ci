@@ -147,10 +147,11 @@ saved result. If the result is empty or a structured error, `--pr`,
 after that time; it can be interrupted or failed. It then checks the
 observation schemas and identities, binary-budget arithmetic, manifest
 agreement, and every requested completed suite: raw index, digests and lengths,
-summary schema and identity, counts, failure files re-derived from the indexed
-JUnit, binary inventory, and the complete rerun lineage. Symlinked or escaping
-paths are rejected. Collection reuses the same summary check before it trusts a
-warm summary.
+summary schema and identity, counts, failure files checked against the indexed
+JUnit (message byte for byte, id a safe unique path segment, diff an ordered
+excerpt of the message), binary inventory, and the complete rerun lineage.
+Symlinked or escaping paths are rejected. Collection reuses the same summary
+check before it trusts a warm summary.
 
 The [`verification-v1`](schema/verification-v1.schema.json) report has an
 `assessment` with the observation, manifest, summary, identity, and suite-set

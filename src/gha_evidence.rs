@@ -16,7 +16,7 @@ use tokio_util::io::StreamReader;
 use url::Url;
 use walkdir::WalkDir;
 
-use crate::diff::{extract_diff, stable_test_id};
+use crate::diff::{extract_diff, is_retained_excerpt, is_safe_stable_id, stable_test_id};
 use crate::error::AppError;
 use crate::model::Suite;
 use crate::observation::{AcquisitionLedger, AcquisitionStage};
@@ -1031,13 +1031,21 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         let stable_id = stable_test_id(&name);
         let failure_dir = suite_dir.join("failures").join(&stable_id);
         let message_path = PathBuf::from(format!("failures/{stable_id}/message.txt"));
+        let diff = extract_diff(&message).map(|diff| format!("{diff}\n"));
+        if diff
+            .as_ref()
+            .is_some_and(|diff| !is_retained_excerpt(&message, diff.as_bytes()))
+        {
+            return Err(AppError::Integrity(format!(
+                "diff extracted for {name} is not an excerpt of its JUnit message"
+            )));
+        }
         write_string_immutable(&failure_dir.join("message.txt"), &message)?;
-        let diff = extract_diff(&message);
         let diff_path = diff
             .as_ref()
             .map(|_| PathBuf::from(format!("failures/{stable_id}/diff.txt")));
         if let Some(diff) = &diff {
-            write_string_immutable(&failure_dir.join("diff.txt"), &format!("{diff}\n"))?;
+            write_string_immutable(&failure_dir.join("diff.txt"), diff)?;
         }
         let record = FailureRecord {
             stable_id: stable_id.clone(),
@@ -2960,20 +2968,25 @@ fn check_failure_files(
     execution: &Path,
     summary: &SuiteSummary,
 ) -> Result<(), AppError> {
-    let mut seen = BTreeSet::new();
+    let mut ids = BTreeSet::new();
+    let mut names = BTreeSet::new();
     let mut junit = BTreeMap::new();
     for failure in &summary.failures {
         let id = &failure.stable_id;
         let message_path = PathBuf::from(format!("failures/{id}/message.txt"));
         let diff_path = PathBuf::from(format!("failures/{id}/diff.txt"));
         let extracted = failure.diff_extraction == "extracted";
-        if *id != stable_test_id(&failure.name)
-            || !seen.insert(id.clone())
-            || failure.message_path != message_path
+        if !is_safe_stable_id(id) || !ids.insert(id.clone()) || !names.insert(failure.name.clone())
+        {
+            return Err(AppError::Integrity(format!(
+                "stored failure record has an unsafe or repeated stable id or name: {id:?}"
+            )));
+        }
+        if failure.message_path != message_path
             || failure.diff_path.as_ref() != extracted.then_some(&diff_path)
         {
             return Err(AppError::Integrity(format!(
-                "stored failure record has a non-canonical identity or path: {id}"
+                "stored failure record has a non-canonical path: {id}"
             )));
         }
         let metadata = read_retained(
@@ -3011,16 +3024,17 @@ fn check_failure_files(
                 "stored failure has no matching retained JUnit failure: {id}"
             )));
         };
-        let diff = extract_diff(message).map(|diff| format!("{diff}\n"));
         let retained_diff = extracted
             .then(|| read_retained(evidence_dir, &execution.join(&diff_path)))
             .transpose()?;
         if failure.result != *result
             || read_retained(evidence_dir, &execution.join(&message_path))? != message.as_bytes()
-            || retained_diff.as_deref() != diff.as_deref().map(str::as_bytes)
+            || retained_diff
+                .as_deref()
+                .is_some_and(|diff| !is_retained_excerpt(message, diff))
         {
             return Err(AppError::Integrity(format!(
-                "stored failure message or diff differs from its retained JUnit record: {id}"
+                "stored failure message or diff does not match its retained JUnit record: {id}"
             )));
         }
     }
