@@ -250,6 +250,34 @@ async fn source_pipeline_failure_is_a_dependency_failure_of_the_rerun() {
     );
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn historical_attempt_reuses_its_retained_rerun_bundle() {
+    let fixture = Fixture::new().await;
+    fixture.serve_run_attempt(1);
+    let output = fixture.collect_commit(&[]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let requests = fixture.server.received_requests().await.unwrap().len();
+    fixture.serve_run_attempt(2);
+
+    let output = fixture.collect_commit(&["--attempt", "1"]);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_shell"]["state"], "completed");
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        requests
+    );
+}
+
 fn validate(name: &str, instance: &Value) {
     let schema: Value = serde_json::from_slice(
         &fs::read(
@@ -323,6 +351,7 @@ impl Fixture {
                 r#"
 case "$*" in
   *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *commits/{SHA}*) printf '%s\n' '{{"sha":"{SHA}"}}' ;;
   *actions/runs/{RUN}/jobs*) /bin/cat '{fixture}/jobs.json' ;;
   *actions/runs/40323508581/jobs*) /bin/cat '{fixture}/source/jobs.json' ;;
   *actions/jobs/121614144713/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {base}' 'RERUN_FROM: 40323508581' ;;
@@ -346,6 +375,36 @@ esac
 
     fn collect(&self, suites: &[&str]) -> std::process::Output {
         self.command(suites).output().unwrap()
+    }
+
+    fn collect_commit(&self, extra: &[&str]) -> std::process::Output {
+        Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+            .env("PATH", self.commands.path())
+            .env("CUBRID_CI_CONFIG", self.data.path().join("missing.toml"))
+            .env_remove("CUBRID_CI_DATA_DIR")
+            .env_remove("CUBRID_CI_ARTIFACT_BASE")
+            .args(["collect-commit", SHA, "--run-id", &RUN.to_string()])
+            .args(["--suite", "test_shell", "--json", "--data-dir"])
+            .arg(self.data.path())
+            .args(extra)
+            .output()
+            .unwrap()
+    }
+
+    fn serve_run_attempt(&self, attempt: u64) {
+        let original =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr7990-rerun/run.json");
+        let mut run: Value = serde_json::from_slice(&fs::read(&original).unwrap()).unwrap();
+        run["run_attempt"] = attempt.into();
+        run["repository"] = serde_json::json!({"full_name": "CUBRID/cubrid"});
+        let advanced = self.commands.path().join("run-served.json");
+        fs::write(&advanced, serde_json::to_vec(&run).unwrap()).unwrap();
+        let gh = self.commands.path().join("gh");
+        let script = fs::read_to_string(&gh).unwrap().replace(
+            &format!("'{}'", original.display()),
+            &format!("'{}'", advanced.display()),
+        );
+        fs::write(gh, script).unwrap();
     }
 
     fn command(&self, suites: &[&str]) -> Command {

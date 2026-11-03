@@ -1290,9 +1290,15 @@ async fn collect_rerun_source(
         write_string_immutable(&metadata, &String::from_utf8_lossy(&bytes))?;
         bytes
     };
+    // `request.run_json` names the run's live attempt, which is newer than a
+    // historical attempt being reused; its own retained metadata is pinned.
+    let child_run = read_retained(
+        request.evidence_dir,
+        &execution_path(request.run_id, request.attempt, request.suite).join("raw/github/run.json"),
+    )?;
     let source_attempt = check_rerun_source_run(
         &bytes,
-        request.run_json,
+        &child_run,
         source_run,
         (request.run_id, request.attempt),
     )?;
@@ -3314,6 +3320,23 @@ struct ActionRun {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn rerun_source_check_binds_child_metadata_to_its_attempt() {
+        let source =
+            br#"{"id":1,"run_attempt":1,"status":"completed","updated_at":"2026-10-26T12:00:00Z"}"#;
+        let child = |attempt: u64| {
+            format!(r#"{{"id":2,"run_attempt":{attempt},"created_at":"2026-10-26T13:00:00Z"}}"#)
+        };
+        assert_eq!(
+            check_rerun_source_run(source, child(1).as_bytes(), 1, (2, 1)).unwrap(),
+            1
+        );
+        assert!(matches!(
+            check_rerun_source_run(source, child(2).as_bytes(), 1, (2, 1)),
+            Err(AppError::Integrity(_))
+        ));
+    }
 
     #[test]
     fn accepts_retained_workflow_test_rc_completion() {
