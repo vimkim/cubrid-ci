@@ -5,6 +5,7 @@ use std::process::{Command, Stdio};
 use std::time::Duration;
 
 use chrono::{SecondsFormat, Utc};
+use cubrid_ci::diff::{extract_diff, stable_test_id};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use walkdir::WalkDir;
@@ -13,6 +14,9 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SHA: &str = "1111111111111111111111111111111111111111";
 const SQL_SUMMARY: &str = "providers/github-actions/runs/123/attempts/2/test_sql/summary.json";
+const FAILED_CASE: &str = "sql/bugs/cases/bug_123.sql";
+const OTHER_ID: &str = "sql-bugs-cases-bug_123.sql";
+const OTHER_DIFF: &str = "--- answer\n+++ actual\n-old\n+new\n";
 
 #[tokio::test(flavor = "multi_thread")]
 async fn complete_bundle_verifies_offline_without_writing() {
@@ -109,6 +113,107 @@ async fn failure_files_must_exist_and_match_the_summary() {
     let (code, report) = fixture.verify(&result, &[]);
     assert_eq!(code, Some(4), "{report:#}");
     assert_issue(&report, "test_sql", "integrity", "metadata disagrees");
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failure_files_from_another_derivation_verify_offline() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    rederive_failure_files(&fixture.suite_dir(&result));
+
+    let (code, report) = fixture.verify(&result, &[]);
+
+    assert_eq!(code, Some(0), "{report:#}");
+    assert_eq!(report["suites"]["test_sql"]["summary"], "validated");
+    assert_eq!(report["issues"], json!([]));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn failure_files_from_another_derivation_are_reused_without_refetching() {
+    let fixture = SqlFixture::new().await;
+    let result = fixture.collect_ok();
+    rederive_failure_files(&fixture.suite_dir(&result));
+    let requests = fixture.server.received_requests().await.unwrap().len();
+
+    let output = fixture.collect();
+
+    assert_eq!(
+        output.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let reused: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(reused["suites"]["test_sql"]["state"], "completed");
+    assert_eq!(
+        fixture.server.received_requests().await.unwrap().len(),
+        requests
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn rederived_failure_files_still_reject_tampering() {
+    type Tamper = fn(&Path);
+    let cases: [(&str, Tamper, &str); 6] = [
+        (
+            "an invented diff line",
+            |suite| append(&rederived_dir(suite).join("diff.txt"), "+invented\n"),
+            "retained JUnit record",
+        ),
+        (
+            "a deleted message",
+            |suite| fs::remove_file(rederived_dir(suite).join("message.txt")).unwrap(),
+            "message.txt",
+        ),
+        (
+            "an edited message",
+            |suite| fs::write(rederived_dir(suite).join("message.txt"), b"edited").unwrap(),
+            "retained JUnit record",
+        ),
+        (
+            "edited metadata",
+            |suite| {
+                rewrite_json(&rederived_dir(suite).join("metadata.json"), |metadata| {
+                    metadata["result"] = json!("error");
+                });
+            },
+            "metadata disagrees",
+        ),
+        (
+            "a deleted declared diff",
+            |suite| fs::remove_file(rederived_dir(suite).join("diff.txt")).unwrap(),
+            "diff.txt",
+        ),
+        (
+            "a parent-directory id",
+            |suite| {
+                rewrite_json(&suite.join("summary.json"), |summary| {
+                    point_record_at(&mut summary["failures"][0], "..");
+                });
+                reindex_summary(suite);
+            },
+            "stored failure record",
+        ),
+    ];
+    for (label, tamper, fragment) in cases {
+        let fixture = SqlFixture::new().await;
+        let result = fixture.collect_ok();
+        let suite = fixture.suite_dir(&result);
+        rederive_failure_files(&suite);
+        tamper(&suite);
+
+        let (code, report) = fixture.verify(&result, &[]);
+        assert_eq!(code, Some(4), "{label}: {report:#}");
+        assert_issue(&report, "test_sql", "integrity", fragment);
+
+        let output = fixture.collect();
+        assert_eq!(
+            output.status.code(),
+            Some(4),
+            "{label}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+    }
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -1063,6 +1168,40 @@ fn reindex_summary(suite_dir: &Path) {
     rewrite_json(&suite_dir.join("raw/index.json"), |index| {
         index["summary_sha256"] = json!(digest);
     });
+}
+
+/// Rewrites the only failure as a collector with another slug rule and another
+/// diff selection would have retained it, so the bundle stays self-consistent.
+fn rederive_failure_files(suite: &Path) {
+    let failures = suite.join("failures");
+    let original = find(&failures, "message.txt").parent().unwrap().to_owned();
+    let message = fs::read_to_string(original.join("message.txt")).unwrap();
+    assert_ne!(stable_test_id(FAILED_CASE), OTHER_ID);
+    assert_ne!(
+        extract_diff(&message).map(|diff| format!("{diff}\n")),
+        Some(OTHER_DIFF.to_owned())
+    );
+
+    let rederived = rederived_dir(suite);
+    fs::rename(&original, &rederived).unwrap();
+    fs::write(rederived.join("diff.txt"), OTHER_DIFF).unwrap();
+    rewrite_json(&rederived.join("metadata.json"), |metadata| {
+        point_record_at(metadata, OTHER_ID);
+    });
+    rewrite_json(&suite.join("summary.json"), |summary| {
+        point_record_at(&mut summary["failures"][0], OTHER_ID);
+    });
+    reindex_summary(suite);
+}
+
+fn rederived_dir(suite: &Path) -> PathBuf {
+    suite.join("failures").join(OTHER_ID)
+}
+
+fn point_record_at(record: &mut Value, id: &str) {
+    record["stable_id"] = json!(id);
+    record["message_path"] = json!(format!("failures/{id}/message.txt"));
+    record["diff_path"] = json!(format!("failures/{id}/diff.txt"));
 }
 
 fn reindex_raw(raw: &Path, relative: &str) {
