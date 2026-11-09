@@ -26,7 +26,8 @@
       "enum": [
         "test_medium",
         "test_sql",
-        "test_shell"
+        "test_shell",
+        "test_sql_by_cci"
       ]
     },
     "ci_state": {

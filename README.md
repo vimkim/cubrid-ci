@@ -1,8 +1,11 @@
 # cubrid-ci
 
 `cubrid-ci` inspects CUBRID pull-request status and collects durable,
-exact-commit GitHub Actions evidence for `test_medium`, `test_sql`, and
-`test_shell`.
+exact-commit GitHub Actions evidence for `test_medium`, `test_sql`,
+`test_shell`, and `test_sql_by_cci`. A `test_sql_by_cci` shard publishes no
+`summary_info`, so its counts come from its JUnit XML, as in the workflow.
+Collecting without `--suite` requests all four suites, so a commit whose CI
+predates `test_sql_by_cci` reports that suite as not observed.
 
 ## Requirements
 

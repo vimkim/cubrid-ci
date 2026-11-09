@@ -1568,6 +1568,154 @@ esac"#,
     assert_eq!(run_metadata_calls, 1);
 }
 
+#[tokio::test(flavor = "multi_thread")]
+async fn junit_only_sql_by_cci_suite_is_collected_and_verified_offline() {
+    let server = MockServer::start().await;
+    let failed = "sql/_01_object/cases/a.sql";
+    let message = concat!(
+        "** Testcase : sql/_01_object/cases/a.sql\n",
+        "** Expected : sql/_01_object/answers/a.answer_cci\n\n",
+        "[Query]\nselect 1;\n\n[Diff]\n--- answer\n+++ actual\n-1\n+2\n\n",
+        "--- statement boundary ---\n[Query]\nselect 2;\n\n[Diff]\n--- answer\n+++ actual\n-3\n+4\n"
+    );
+    let junit = format!(
+        "<testsuite tests=\"3\" failures=\"1\" skipped=\"1\">\n\
+         <testcase classname=\"sql/_01_object/cases\" name=\"{failed}\" time=\"0.1\">\n\
+         <failure message=\"unexpected result\" type=\"UnexpectedResult\"><![CDATA[{message}]]></failure>\n\
+         </testcase>\n\
+         <testcase classname=\"sql/_01_object/cases\" name=\"sql/_01_object/cases/b.sql\" time=\"0.1\"></testcase>\n\
+         <testcase classname=\"sql/_01_object/cases\" name=\"sql/_01_object/cases/c.sql\" time=\"0\"><skipped/></testcase>\n\
+         </testsuite>\n"
+    );
+    let failed_list = format!("00\t{failed}\n");
+    for (url_path, body) in [
+        (
+            "/runs/123/sql_by_cci/plan/split.meta",
+            concat!(
+                "total=3\nunits=1\npar=1\ntimed=0\n",
+                "tc_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n",
+                "tc_branch='develop'\nrerun_unrun=0\nrerun_short=0\nrerun_gone=0\n"
+            ),
+        ),
+        (
+            "/runs/123/sql_by_cci/plan/shards/",
+            "<a href=\"00.list\">00.list</a>",
+        ),
+        ("/runs/123/sql_by_cci/plan/plan.tsv", "00\t3\t1\t0\n"),
+        ("/runs/123/sql_by_cci/shard/", "<a href=\"00/\">00/</a>"),
+        (
+            "/runs/123/sql_by_cci/shard/00/test-results/",
+            "<a href=\"linux_sql_by_cci_64bit_release.xml\">x</a>",
+        ),
+        (
+            "/runs/123/sql_by_cci/collect/failed.list",
+            failed_list.as_str(),
+        ),
+        ("/runs/123/sql_by_cci/collect/verdict", "fail\n"),
+        (
+            "/runs/123/sql_by_cci/shard/00/build.read",
+            "sha=1111111111111111111111111111111111111111\nmode=release\nns=pr\nrun_id=123\nrun_attempt=2\n",
+        ),
+        (
+            "/runs/123/sql_by_cci/shard/00/tc.read",
+            "tc_sha=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\ntc_branch=develop\n",
+        ),
+        (
+            "/runs/123/sql_by_cci/shard/00/shard.done",
+            "suite=sql_by_cci\nidx=00\nassigned=3\ntest_rc=1\n",
+        ),
+        (
+            "/runs/123/sql_by_cci/shard/00/test-results/linux_sql_by_cci_64bit_release.xml",
+            junit.as_str(),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(url_path))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .mount(&server)
+            .await;
+    }
+    let commands = tempfile::tempdir().unwrap();
+    let mut snapshot = status_snapshot();
+    snapshot["checks"][0]["name"] = json!("gha-ci: test_sql_by_cci");
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&snapshot).unwrap()
+        ),
+    );
+    write_gh_command(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = suite_command(commands.path(), data.path(), "test_sql_by_cci")
+        .output()
+        .unwrap();
+
+    assert!(
+        output.status.success(),
+        "stdout: {}\nstderr: {}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    validate_schema(
+        include_str!("../schema/command-result-v2.schema.json"),
+        &output.stdout,
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let suite = &result["suites"]["test_sql_by_cci"];
+    assert_eq!(suite["state"], "completed", "{result}");
+    let output_dir = PathBuf::from(result["output_dir"].as_str().unwrap());
+    let summary_path = output_dir.join(suite["summary"].as_str().unwrap());
+    let summary: Value = serde_json::from_slice(&fs::read(&summary_path).unwrap()).unwrap();
+    assert_eq!(summary["suite"], "test_sql_by_cci");
+    assert_eq!(summary["verdict"], "fail");
+    assert_eq!(
+        (
+            &summary["counts"]["planned"],
+            &summary["counts"]["run"],
+            &summary["counts"]["failures"],
+            &summary["counts"]["skipped"],
+        ),
+        (&json!(3), &json!(2), &json!(1), &json!(1))
+    );
+    assert_eq!(summary["failures"][0]["name"], failed);
+    assert_eq!(summary["shards"][0]["build"]["mode"], "release");
+    let requests = server.received_requests().await.unwrap();
+    assert!(
+        requests
+            .iter()
+            .all(|request| !request.url.path().ends_with("/summary_info")),
+        "a JUnit-only suite asks for no workflow result file"
+    );
+
+    let saved = data.path().join("result.json");
+    fs::write(&saved, &output.stdout).unwrap();
+    let verify = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+        .env("PATH", commands.path().join("offline"))
+        .env("CUBRID_CI_CONFIG", missing_config_path())
+        .env_remove("CUBRID_CI_DATA_DIR")
+        .args(["verify", "--json", "--data-dir"])
+        .arg(data.path())
+        .arg(&saved)
+        .args([
+            "--suite",
+            "test_sql_by_cci",
+            "--pr",
+            "7990",
+            "--pr-head",
+            SHA,
+        ])
+        .output()
+        .unwrap();
+    assert!(
+        verify.status.success(),
+        "{}",
+        String::from_utf8_lossy(&verify.stdout)
+    );
+}
+
 fn write_ci_commands(commands: &Path, server: &MockServer) {
     write_ci_commands_with_base(commands, &server.uri());
 }
@@ -1624,6 +1772,10 @@ fn write_status_sequence(commands: &Path, counter: &Path, first: &Value, later: 
 }
 
 fn command(commands: &Path, data: &Path) -> Command {
+    suite_command(commands, data, "test_sql")
+}
+
+fn suite_command(commands: &Path, data: &Path, suite: &str) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"));
     command
         .env("PATH", commands)
@@ -1636,7 +1788,7 @@ fn command(commands: &Path, data: &Path) -> Command {
             "--commit",
             SHA,
             "--suite",
-            "test_sql",
+            suite,
             "--data-dir",
         ])
         .arg(data)

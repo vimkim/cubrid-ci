@@ -6,7 +6,7 @@
   "required": ["schema_version", "suite", "ci_state", "collection_state", "run_id", "attempt", "artifact_base", "verdict", "counts", "shards", "failures"],
   "properties": {
     "schema_version": { "const": 2 },
-    "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+    "suite": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
     "ci_state": { "enum": ["success", "failure"] },
     "collection_state": { "const": "complete" },
     "run_id": { "type": "integer", "minimum": 1 },

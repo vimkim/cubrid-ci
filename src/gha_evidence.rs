@@ -31,14 +31,26 @@ const MAX_GITHUB_LOG_BYTES: usize = 32 * 1024 * 1024;
 #[derive(Debug, Clone, Copy)]
 struct SuiteLayout {
     remote_name: &'static str,
-    result_file: &'static str,
-    result_format: ResultFormat,
+    shard_result: ShardResult,
 }
 
+/// Where a shard's workflow publishes its passed, failed, and skipped counts.
 #[derive(Debug, Clone, Copy)]
-enum ResultFormat {
+enum ShardResult {
     SummaryInfo,
     TestStatus,
+    /// The workflow counts these shards from their JUnit XML alone.
+    Junit,
+}
+
+impl ShardResult {
+    const fn file(self) -> Option<&'static str> {
+        match self {
+            Self::SummaryInfo => Some("summary_info"),
+            Self::TestStatus => Some("test_status.data"),
+            Self::Junit => None,
+        }
+    }
 }
 
 impl SuiteLayout {
@@ -46,18 +58,19 @@ impl SuiteLayout {
         match suite {
             Suite::Medium => Self {
                 remote_name: "medium",
-                result_file: "summary_info",
-                result_format: ResultFormat::SummaryInfo,
+                shard_result: ShardResult::SummaryInfo,
             },
             Suite::Sql => Self {
                 remote_name: "sql",
-                result_file: "summary_info",
-                result_format: ResultFormat::SummaryInfo,
+                shard_result: ShardResult::SummaryInfo,
             },
             Suite::Shell => Self {
                 remote_name: "shell",
-                result_file: "test_status.data",
-                result_format: ResultFormat::TestStatus,
+                shard_result: ShardResult::TestStatus,
+            },
+            Suite::SqlByCci => Self {
+                remote_name: "sql_by_cci",
+                shard_result: ShardResult::Junit,
             },
         }
     }
@@ -651,23 +664,25 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                         false,
                     ),
                 )?;
-                at_fetch_stage(
-                    AcquisitionStage::WorkflowResult,
-                    classify_pipeline_fetch(
-                        fetch_text(
-                            client,
-                            fetch_permits,
-                            shard_root.join(layout.result_file).unwrap(),
-                            MAX_TEXT_BYTES,
-                            &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
-                        )
-                        .await,
-                        jobs,
-                        provider_raw,
-                        &format!("shard {shard} workflow result"),
-                        true,
-                    ),
-                )?;
+                if let Some(result_file) = layout.shard_result.file() {
+                    at_fetch_stage(
+                        AcquisitionStage::WorkflowResult,
+                        classify_pipeline_fetch(
+                            fetch_text(
+                                client,
+                                fetch_permits,
+                                shard_root.join(result_file).unwrap(),
+                                MAX_TEXT_BYTES,
+                                &provider_raw.join(format!("shards/{shard}/{result_file}")),
+                            )
+                            .await,
+                            jobs,
+                            provider_raw,
+                            &format!("shard {shard} workflow result"),
+                            true,
+                        ),
+                    )?;
+                }
                 at_fetch_stage(
                     AcquisitionStage::ShardCompletion,
                     classify_pipeline_fetch(
@@ -878,17 +893,72 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             )));
         }
 
-        let workflow_result = read_bounded_text(
-            &provider_raw.join(format!("shards/{shard}/{}", layout.result_file)),
-            MAX_TEXT_BYTES,
+        let _results_index = read_bounded_text(
+            &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
+            MAX_INDEX_BYTES,
         )?;
+
+        let mut junit_shard_counts = WorkflowCounts::default();
+        for file in &junit_files {
+            let xml = read_bounded_text(
+                &provider_raw.join(format!("shards/{shard}/{file}")),
+                MAX_JUNIT_BYTES,
+            )?;
+            for case in parse_junit(&xml)? {
+                counts.tests += 1;
+                if case.failure.is_some() {
+                    counts.failures += 1;
+                    junit_shard_counts.failed += 1;
+                    junit_shard_counts.failed_names.insert(case.name.clone());
+                    if junit_failures
+                        .insert((shard.clone(), case.name.clone()), case)
+                        .is_some()
+                    {
+                        return Err(AppError::Integrity(format!(
+                            "JUnit repeats a failed testcase in shard {shard}"
+                        )));
+                    }
+                } else if case.error.is_some() {
+                    counts.errors += 1;
+                    junit_shard_counts.failed += 1;
+                    junit_shard_counts.failed_names.insert(case.name.clone());
+                    if junit_failures
+                        .insert((shard.clone(), case.name.clone()), case)
+                        .is_some()
+                    {
+                        return Err(AppError::Integrity(format!(
+                            "JUnit repeats an errored testcase in shard {shard}"
+                        )));
+                    }
+                } else if case.skipped {
+                    counts.skipped += 1;
+                    junit_shard_counts.skipped += 1;
+                } else {
+                    junit_shard_counts.passed += 1;
+                }
+            }
+        }
         let shard_done = read_bounded_text(
             &provider_raw.join(format!("shards/{shard}/shard.done")),
             MAX_INDEX_BYTES,
         )?;
-        let shard_counts = match layout.result_format {
-            ResultFormat::SummaryInfo => parse_summary_info(&workflow_result)?,
-            ResultFormat::TestStatus => parse_test_status(&workflow_result)?,
+        let read_workflow_result = |file: &str| {
+            read_bounded_text(
+                &provider_raw.join(format!("shards/{shard}/{file}")),
+                MAX_TEXT_BYTES,
+            )
+        };
+        let shard_counts = match layout.shard_result {
+            ShardResult::SummaryInfo => parse_summary_info(&read_workflow_result("summary_info")?)?,
+            ShardResult::TestStatus => {
+                parse_test_status(&read_workflow_result("test_status.data")?)?
+            }
+            ShardResult::Junit => WorkflowCounts {
+                passed: junit_shard_counts.passed,
+                failed: junit_shard_counts.failed,
+                skipped: junit_shard_counts.skipped,
+                failed_names: BTreeSet::new(),
+            },
         };
         let assigned =
             match validate_shard_done(&shard_done, &shard, layout.remote_name, shard_counts.failed)
@@ -940,51 +1010,6 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             .await?;
         }
 
-        let _results_index = read_bounded_text(
-            &provider_raw.join(format!("indexes/shard-{shard}-results.html")),
-            MAX_INDEX_BYTES,
-        )?;
-
-        let mut junit_shard_counts = WorkflowCounts::default();
-        for file in &junit_files {
-            let xml = read_bounded_text(
-                &provider_raw.join(format!("shards/{shard}/{file}")),
-                MAX_JUNIT_BYTES,
-            )?;
-            for case in parse_junit(&xml)? {
-                counts.tests += 1;
-                if case.failure.is_some() {
-                    counts.failures += 1;
-                    junit_shard_counts.failed += 1;
-                    junit_shard_counts.failed_names.insert(case.name.clone());
-                    if junit_failures
-                        .insert((shard.clone(), case.name.clone()), case)
-                        .is_some()
-                    {
-                        return Err(AppError::Integrity(format!(
-                            "JUnit repeats a failed testcase in shard {shard}"
-                        )));
-                    }
-                } else if case.error.is_some() {
-                    counts.errors += 1;
-                    junit_shard_counts.failed += 1;
-                    junit_shard_counts.failed_names.insert(case.name.clone());
-                    if junit_failures
-                        .insert((shard.clone(), case.name.clone()), case)
-                        .is_some()
-                    {
-                        return Err(AppError::Integrity(format!(
-                            "JUnit repeats an errored testcase in shard {shard}"
-                        )));
-                    }
-                } else if case.skipped {
-                    counts.skipped += 1;
-                    junit_shard_counts.skipped += 1;
-                } else {
-                    junit_shard_counts.passed += 1;
-                }
-            }
-        }
         if junit_shard_counts.passed != shard_counts.passed
             || junit_shard_counts.failed != shard_counts.failed
             || junit_shard_counts.skipped != shard_counts.skipped
@@ -999,7 +1024,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 "shard {shard} failed-list and JUnit testcase identities disagree"
             )));
         }
-        if matches!(layout.result_format, ResultFormat::SummaryInfo)
+        if matches!(layout.shard_result, ShardResult::SummaryInfo)
             && shard_counts.failed_names != inventory_names
         {
             return Err(AppError::Integrity(format!(

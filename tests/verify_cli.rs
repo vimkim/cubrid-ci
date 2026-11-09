@@ -545,11 +545,15 @@ exit 1"#,
 #[tokio::test(flavor = "multi_thread")]
 async fn rerun_lineage_and_carried_verdicts_verify_offline() {
     let fixture = RerunFixture::new().await;
-    let result = fixture.collect(&[]);
+    let result = fixture.collect(&PR7990_SUITES);
     assert_eq!(result.0, Some(0), "{:#}", result.1);
     let result = result.1;
 
-    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+    let (code, report) = verify(
+        &fixture.data,
+        &result,
+        &[&["--pr", "7990"][..], &PR7990_SUITES].concat(),
+    );
 
     assert_eq!(code, Some(0), "{report:#}");
     assert_eq!(
@@ -572,7 +576,7 @@ async fn rerun_lineage_and_carried_verdicts_verify_offline() {
 #[tokio::test(flavor = "multi_thread")]
 async fn tampered_rerun_source_invalidates_only_its_suite() {
     let fixture = RerunFixture::new().await;
-    let (_, result) = fixture.collect(&[]);
+    let (_, result) = fixture.collect(&PR7990_SUITES);
     let root = PathBuf::from(result["output_dir"].as_str().unwrap());
     let source = root.join("providers/github-actions/runs/40323508581/attempts/1/test_shell");
     rewrite_json(&source.join("summary.json"), |summary| {
@@ -580,7 +584,11 @@ async fn tampered_rerun_source_invalidates_only_its_suite() {
     });
     reindex_summary(&source);
 
-    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+    let (code, report) = verify(
+        &fixture.data,
+        &result,
+        &[&["--pr", "7990"][..], &PR7990_SUITES].concat(),
+    );
 
     assert_eq!(code, Some(4), "{report:#}");
     assert_eq!(report["suites"]["test_shell"]["summary"], "invalid");
@@ -597,12 +605,16 @@ async fn tampered_rerun_source_invalidates_only_its_suite() {
 #[tokio::test(flavor = "multi_thread")]
 async fn malformed_json_in_a_rerun_source_is_an_integrity_failure() {
     let fixture = RerunFixture::new().await;
-    let (_, result) = fixture.collect(&[]);
+    let (_, result) = fixture.collect(&PR7990_SUITES);
     let root = PathBuf::from(result["output_dir"].as_str().unwrap());
     let source = root.join("providers/github-actions/runs/40323508581/attempts/1/test_shell");
     append(&source.join("summary.json"), "x");
 
-    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+    let (code, report) = verify(
+        &fixture.data,
+        &result,
+        &[&["--pr", "7990"][..], &PR7990_SUITES].concat(),
+    );
 
     assert_eq!(code, Some(4), "{report:#}");
     assert_issue(
@@ -616,13 +628,17 @@ async fn malformed_json_in_a_rerun_source_is_an_integrity_failure() {
 #[tokio::test(flavor = "multi_thread")]
 async fn carried_forward_summary_must_keep_the_source_verdict() {
     let fixture = RerunFixture::new().await;
-    let (_, result) = fixture.collect(&[]);
+    let (_, result) = fixture.collect(&PR7990_SUITES);
     let root = PathBuf::from(result["output_dir"].as_str().unwrap());
     let carried = root.join(result["suites"]["test_medium"]["summary"].as_str().unwrap());
     rewrite_json(&carried, |summary| summary["verdict"] = json!("fail"));
     reindex_summary(carried.parent().unwrap());
 
-    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+    let (code, report) = verify(
+        &fixture.data,
+        &result,
+        &[&["--pr", "7990"][..], &PR7990_SUITES].concat(),
+    );
 
     assert_eq!(code, Some(4), "{report:#}");
     assert_eq!(report["suites"]["test_medium"]["summary"], "invalid");
@@ -686,10 +702,14 @@ async fn incomplete_observation_reports_validated_suites_separately() {
         .with_priority(1)
         .mount(&fixture.server)
         .await;
-    let (code, result) = fixture.collect(&[]);
+    let (code, result) = fixture.collect(&PR7990_SUITES);
     assert_eq!(code, Some(4), "{result:#}");
 
-    let (code, report) = verify(&fixture.data, &result, &["--pr", "7990"]);
+    let (code, report) = verify(
+        &fixture.data,
+        &result,
+        &[&["--pr", "7990"][..], &PR7990_SUITES].concat(),
+    );
 
     assert_eq!(code, Some(3), "{report:#}");
     assert_eq!(report["assessment"]["observation"], "incomplete");
@@ -1048,6 +1068,16 @@ esac"#,
         )
     }
 }
+
+/// PR 7990's fixture run predates `test_sql_by_cci`.
+const PR7990_SUITES: [&str; 6] = [
+    "--suite",
+    "test_medium",
+    "--suite",
+    "test_sql",
+    "--suite",
+    "test_shell",
+];
 
 struct RerunFixture {
     server: MockServer,

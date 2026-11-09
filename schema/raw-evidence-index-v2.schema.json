@@ -8,7 +8,7 @@
     "schema_version": { "const": 2 },
     "run_id": { "type": "integer", "minimum": 1 },
     "attempt": { "type": "integer", "minimum": 1 },
-    "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+    "suite": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
     "summary_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
     "files": {
       "type": "array",

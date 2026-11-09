@@ -24,7 +24,7 @@
     "output_dir": { "type": "string" },
     "suites": {
       "type": "object",
-      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell"] },
+      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
       "additionalProperties": { "$ref": "#/$defs/suite" },
       "minProperties": 1
     },
@@ -34,7 +34,7 @@
         "type": "object",
         "required": ["suite", "kind", "diagnostic", "message"],
         "properties": {
-          "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+          "suite": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
           "kind": { "enum": ["input", "unavailable", "integrity", "remote", "storage"] },
           "diagnostic": { "enum": ["input", "unavailable", "expired", "oversized", "malformed", "job_level", "identity_or_integrity", "remote", "storage"] },
           "message": { "type": "string" }

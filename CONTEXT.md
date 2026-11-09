@@ -32,7 +32,7 @@ The exact CUBRID commit for which an evidence snapshot is requested. It is the l
 _Avoid_: Current commit
 
 **Suite result**:
-The outcome reported for one of CUBRID's `test_medium`, `test_sql`, or `test_shell` suites in an evidence snapshot.
+The outcome reported for one of CUBRID's `test_medium`, `test_sql`, `test_shell`, or `test_sql_by_cci` suites in an evidence snapshot.
 _Avoid_: Job result
 
 **Collection success**:

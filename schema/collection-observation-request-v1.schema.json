@@ -33,7 +33,7 @@
     "started_at": { "type": "string", "format": "date-time" },
     "requested_suites": {
       "type": "array",
-      "items": { "enum": ["test_medium", "test_sql", "test_shell"] },
+      "items": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
       "minItems": 1,
       "uniqueItems": true
     },

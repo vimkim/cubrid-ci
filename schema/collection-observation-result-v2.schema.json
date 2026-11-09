@@ -72,7 +72,8 @@
                 "enum": [
                   "test_medium",
                   "test_sql",
-                  "test_shell"
+                  "test_shell",
+                  "test_sql_by_cci"
                 ]
               },
               "shard": {
@@ -100,7 +101,8 @@
         "enum": [
           "test_medium",
           "test_sql",
-          "test_shell"
+          "test_shell",
+          "test_sql_by_cci"
         ]
       },
       "additionalProperties": {
@@ -233,7 +235,8 @@
             "enum": [
               "test_medium",
               "test_sql",
-              "test_shell"
+              "test_shell",
+              "test_sql_by_cci"
             ]
           },
           "additionalProperties": {
@@ -256,7 +259,8 @@
                 "enum": [
                   "test_medium",
                   "test_sql",
-                  "test_shell"
+                  "test_shell",
+                  "test_sql_by_cci"
                 ]
               },
               "kind": {
@@ -381,7 +385,8 @@
                     "enum": [
                       "test_medium",
                       "test_sql",
-                      "test_shell"
+                      "test_shell",
+                      "test_sql_by_cci"
                     ]
                   },
                   "source": {

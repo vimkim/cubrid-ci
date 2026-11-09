@@ -9,11 +9,13 @@ use wiremock::{Mock, MockServer, ResponseTemplate};
 
 const SHA: &str = "52987c654b6f04734cad01c11c80c7f30358b33c";
 const RUN: u64 = 40334404336;
+/// The fixture run predates `test_sql_by_cci`.
+const PR7990_SUITES: [&str; 3] = ["test_medium", "test_sql", "test_shell"];
 
 #[tokio::test(flavor = "multi_thread")]
 async fn rerun_collects_carried_suites_and_three_passing_shell_cases() {
     let fixture = Fixture::new().await;
-    let output = fixture.collect(&[]);
+    let output = fixture.collect(&PR7990_SUITES);
     assert!(
         output.status.success(),
         "{}\n{}",
@@ -52,7 +54,7 @@ async fn rerun_collects_carried_suites_and_three_passing_shell_cases() {
     }
     validate("command-result-v2.schema.json", &result);
     let requests = fixture.server.received_requests().await.unwrap().len();
-    let replay = fixture.collect(&[]);
+    let replay = fixture.collect(&PR7990_SUITES);
     assert!(
         replay.status.success(),
         "{}",
@@ -115,7 +117,7 @@ async fn rerun_source_must_test_the_same_engine_commit() {
 async fn configured_artifact_base_still_requires_concrete_source_lineage() {
     let fixture = Fixture::new().await;
     let output = fixture
-        .command(&[])
+        .command(&PR7990_SUITES)
         .env("CUBRID_CI_ARTIFACT_BASE", fixture.server.uri())
         .output()
         .unwrap();
@@ -206,7 +208,7 @@ async fn invalid_source_junit_does_not_block_independent_rerun_suites() {
         .mount(&fixture.server)
         .await;
     let output = fixture
-        .command(&[])
+        .command(&PR7990_SUITES)
         .arg("--include-binaries")
         .output()
         .unwrap();

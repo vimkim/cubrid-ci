@@ -31,7 +31,7 @@
             "type": "object",
             "required": ["suite", "shard", "name", "consumed_bytes"],
             "properties": {
-              "suite": { "enum": ["test_medium", "test_sql", "test_shell"] },
+              "suite": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
               "shard": { "type": "string", "pattern": "^[0-9]+$" },
               "name": { "type": "string", "minLength": 1 },
               "consumed_bytes": { "type": "integer", "minimum": 0 }
@@ -44,7 +44,7 @@
     },
     "acquisition": {
       "type": "object",
-      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell"] },
+      "propertyNames": { "enum": ["test_medium", "test_sql", "test_shell", "test_sql_by_cci"] },
       "additionalProperties": {
         "type": "object",
         "required": ["shards"],
