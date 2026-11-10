@@ -28,7 +28,7 @@ cubrid-ci status
 # Show a specific PR.
 cubrid-ci status 7990
 
-# Collect all suites for local HEAD; local HEAD must equal the published PR head.
+# Collect the default suites for local HEAD; local HEAD must equal the published PR head.
 cubrid-ci collect
 
 # Collect an explicit PR and exact commit.

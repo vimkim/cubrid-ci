@@ -58,7 +58,8 @@ pub struct VerifyArgs {
     #[arg(long)]
     pub pr_head: Option<String>,
 
-    /// Requested suite, as passed to the collection; repeat for a subset (all suites by default).
+    /// Requested suite, as passed to the collection; repeat for several (default: test_medium,
+    /// test_sql, test_shell; test_sql_by_cci only when named).
     #[arg(long, value_enum)]
     pub suite: Vec<Suite>,
 
@@ -80,7 +81,8 @@ pub struct CollectArgs {
     #[arg(long)]
     pub commit: Option<String>,
 
-    /// Suite to collect; repeat to select a subset (all suites by default).
+    /// Suite to collect; repeat for several (default: test_medium, test_sql, test_shell;
+    /// test_sql_by_cci only when named).
     #[arg(long, value_enum)]
     pub suite: Vec<Suite>,
 
@@ -142,7 +144,8 @@ pub struct BaseArgs {
 
 #[derive(Debug, Clone, Args)]
 pub struct CommitOptions {
-    /// Suite to collect; repeat for a subset (all by default).
+    /// Suite to collect; repeat for several (default: test_medium, test_sql, test_shell;
+    /// test_sql_by_cci only when named).
     #[arg(long, value_enum)]
     pub suite: Vec<Suite>,
     /// Select a particular run instead of exact-commit status/check discovery.
