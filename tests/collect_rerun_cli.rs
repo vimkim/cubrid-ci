@@ -220,7 +220,7 @@ async fn invalid_source_junit_does_not_block_independent_rerun_suites() {
         result["errors"][0]["message"]
             .as_str()
             .unwrap()
-            .contains("workflow result and JUnit counts disagree")
+            .contains("JUnit omits")
     );
     assert!(result["suites"]["test_sql"]["summary"].is_null());
 }

@@ -140,7 +140,7 @@ async fn test_rc_one_does_not_waive_junit_reconciliation() {
         result["errors"][0]["message"]
             .as_str()
             .unwrap()
-            .contains("workflow result and JUnit counts disagree")
+            .contains("summary_info and JUnit verdicts disagree")
     );
     let root = PathBuf::from(result["output_dir"].as_str().unwrap());
     assert!(
@@ -537,6 +537,60 @@ async fn interrupted_mandatory_response_records_endpoint_stage_and_consumed_byte
     assert_eq!(shard["kind"], "remote");
     assert_eq!(shard["diagnostic"], "remote");
     assert!(shard["message"].as_str().unwrap().contains("read http"));
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn junit_omitting_nested_summary_cases_names_the_omitted_testcases() {
+    let server = MockServer::start().await;
+    mount_evidence(
+        &server,
+        concat!(
+            "total:1\nsuccess:0\nfail:1\ntotalTime:1200ms\nSiteRunTimes:0times\n",
+            "/home/cubrid-testcases/sql/bugs/cases/bug_123.sql:nok    1200ms\n",
+            "total:0\nsuccess:0\nfail:0\ntotalTime:0ms\nSiteRunTimes:0times\n",
+            "/home/cubrid-testcases/sql/bugs/cbrd-27742/cases/cbrd_27742.sql:ok    146ms\n",
+        ),
+        SHA,
+        2,
+    )
+    .await;
+    for (url_path, body) in [
+        ("/runs/123/sql/plan/plan.tsv", "00\t2\t1\t1.0\n"),
+        (
+            "/runs/123/sql/plan/split.meta",
+            concat!(
+                "total=2\nunits=1\npar=1\ntimed=0\n",
+                "tc_sha='aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'\n",
+                "tc_branch='develop'\nrerun_unrun=0\nrerun_short=0\nrerun_gone=0\n"
+            ),
+        ),
+    ] {
+        Mock::given(method("GET"))
+            .and(path(url_path))
+            .respond_with(ResponseTemplate::new(200).set_body_string(body))
+            .with_priority(1)
+            .mount(&server)
+            .await;
+    }
+    let commands = tempfile::tempdir().unwrap();
+    write_ci_commands(commands.path(), &server);
+    let data = tempfile::tempdir().unwrap();
+
+    let output = command(commands.path(), data.path()).output().unwrap();
+
+    assert_eq!(output.status.code(), Some(4));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "collection_failed");
+    assert_eq!(result["errors"][0]["kind"], "integrity");
+    assert_eq!(
+        result["errors"][0]["message"],
+        concat!(
+            "result identity mismatch: ",
+            "shard 00 JUnit omits 1 testcase that summary_info reports ",
+            "(summary_info 1/1/0, JUnit 0/1/0 passed/failed/skipped): ",
+            "sql/bugs/cbrd-27742/cases/cbrd_27742.sql"
+        )
+    );
 }
 
 #[tokio::test(flavor = "multi_thread")]

@@ -906,6 +906,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             )?;
             for case in parse_junit(&xml)? {
                 counts.tests += 1;
+                junit_shard_counts.names.insert(case.name.clone());
                 if case.failure.is_some() {
                     counts.failures += 1;
                     junit_shard_counts.failed += 1;
@@ -958,6 +959,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 failed: junit_shard_counts.failed,
                 skipped: junit_shard_counts.skipped,
                 failed_names: BTreeSet::new(),
+                names: BTreeSet::new(),
             },
         };
         let assigned =
@@ -1014,8 +1016,11 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             || junit_shard_counts.failed != shard_counts.failed
             || junit_shard_counts.skipped != shard_counts.skipped
         {
-            return Err(AppError::Integrity(format!(
-                "shard {shard} workflow result and JUnit counts disagree"
+            return Err(AppError::Integrity(count_disagreement(
+                &shard,
+                layout.shard_result,
+                &shard_counts,
+                &junit_shard_counts,
             )));
         }
         let inventory_names = inventory_by_shard.get(&shard).cloned().unwrap_or_default();
@@ -2691,6 +2696,78 @@ struct WorkflowCounts {
     failed: u64,
     skipped: u64,
     failed_names: BTreeSet<String>,
+    names: BTreeSet<String>,
+}
+
+impl WorkflowCounts {
+    fn triple(&self) -> String {
+        format!("{}/{}/{}", self.passed, self.failed, self.skipped)
+    }
+}
+
+fn count_disagreement(
+    shard: &str,
+    source: ShardResult,
+    workflow: &WorkflowCounts,
+    junit: &WorkflowCounts,
+) -> String {
+    let source = source.file().unwrap_or("workflow result");
+    let counts = format!(
+        "({source} {}, JUnit {} passed/failed/skipped)",
+        workflow.triple(),
+        junit.triple()
+    );
+    if workflow.names.is_empty() {
+        return format!("shard {shard} {source} and JUnit counts disagree {counts}");
+    }
+    let omitted = workflow.names.difference(&junit.names).collect::<Vec<_>>();
+    let unexpected = junit.names.difference(&workflow.names).collect::<Vec<_>>();
+    let mut claims = Vec::new();
+    let mut listings = Vec::new();
+    if !omitted.is_empty() {
+        claims.push(format!(
+            "JUnit omits {} that {source} reports",
+            testcase_count(omitted.len())
+        ));
+        listings.push(testcase_list(&omitted));
+    }
+    if !unexpected.is_empty() {
+        claims.push(format!(
+            "{source} omits {} that JUnit reports",
+            testcase_count(unexpected.len())
+        ));
+        listings.push(testcase_list(&unexpected));
+    }
+    if claims.is_empty() {
+        return format!("shard {shard} {source} and JUnit verdicts disagree {counts}");
+    }
+    format!(
+        "shard {shard} {} {counts}: {}",
+        claims.join("; "),
+        listings.join("; ")
+    )
+}
+
+fn testcase_count(count: usize) -> String {
+    if count == 1 {
+        "1 testcase".to_owned()
+    } else {
+        format!("{count} testcases")
+    }
+}
+
+fn testcase_list(names: &[&String]) -> String {
+    const SHOWN: usize = 20;
+    let mut listed = names
+        .iter()
+        .take(SHOWN)
+        .map(|name| name.as_str())
+        .collect::<Vec<_>>()
+        .join(", ");
+    if names.len() > SHOWN {
+        listed.push_str(&format!(", and {} more", names.len() - SHOWN));
+    }
+    listed
 }
 
 fn parse_plan_table(value: &str) -> Result<BTreeMap<String, u64>, AppError> {
@@ -2735,14 +2812,15 @@ fn parse_summary_info(value: &str) -> Result<WorkflowCounts, AppError> {
         let Some(capture) = verdict.captures(line) else {
             continue;
         };
+        let raw_name = &line[..capture.get(0).expect("whole regex capture").start()];
+        let name = raw_name
+            .split_once("/cubrid-testcases/")
+            .map_or(raw_name, |(_, relative)| relative);
+        counts.names.insert(name.to_owned());
         match capture.get(1).map(|value| value.as_str()) {
             Some("ok") => counts.passed += 1,
             Some("nok") => {
                 counts.failed += 1;
-                let raw_name = &line[..capture.get(0).expect("whole regex capture").start()];
-                let name = raw_name
-                    .split_once("/cubrid-testcases/")
-                    .map_or(raw_name, |(_, relative)| relative);
                 if !counts.failed_names.insert(name.to_owned()) {
                     return Err(AppError::Integrity(format!(
                         "summary_info repeats failed testcase {name}"
@@ -2784,6 +2862,7 @@ fn parse_test_status(value: &str) -> Result<WorkflowCounts, AppError> {
         failed: count("total_fail_case_count")?,
         skipped: count("total_skip_case_count")?,
         failed_names: BTreeSet::new(),
+        names: BTreeSet::new(),
     };
     if executed != counts.passed + counts.failed {
         return Err(AppError::Integrity(
