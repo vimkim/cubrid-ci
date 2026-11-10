@@ -102,10 +102,7 @@ pub async fn run(
     progress: &dyn CollectProgress,
 ) -> Result<CollectResult, AppError> {
     progress.report(ProgressEvent::Starting {
-        total: Suite::ALL
-            .into_iter()
-            .filter(|suite| args.options.suite.is_empty() || args.options.suite.contains(suite))
-            .count(),
+        total: Suite::requested(&args.options.suite).len(),
     });
     let commit = gha_collect::validate_full_sha(&args.sha)?;
     collect(&commit, &args.options, None, progress).await
@@ -116,10 +113,7 @@ pub async fn run_base(
     progress: &dyn CollectProgress,
 ) -> Result<CollectResult, AppError> {
     progress.report(ProgressEvent::Starting {
-        total: Suite::ALL
-            .into_iter()
-            .filter(|suite| args.options.suite.is_empty() || args.options.suite.contains(suite))
-            .count(),
+        total: Suite::requested(&args.options.suite).len(),
     });
     let pr_url = gha_collect::canonical_pr(&args.pr)?;
     let pr_number: u64 = pr_url
@@ -212,10 +206,7 @@ async fn collect(
             "commit endpoint returned a different SHA".to_owned(),
         ));
     }
-    let suites: Vec<_> = Suite::ALL
-        .into_iter()
-        .filter(|suite| options.suite.is_empty() || options.suite.contains(suite))
-        .collect();
+    let suites: Vec<_> = Suite::requested(&options.suite);
     let mut candidates = Vec::new();
     let mut runs = BTreeMap::new();
     if let Some(run_id) = options.run_id {

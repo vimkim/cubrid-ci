@@ -4,8 +4,10 @@
 exact-commit GitHub Actions evidence for `test_medium`, `test_sql`,
 `test_shell`, and `test_sql_by_cci`. A `test_sql_by_cci` shard publishes no
 `summary_info`, so its counts come from its JUnit XML, as in the workflow.
-Collecting without `--suite` requests all four suites, so a commit whose CI
-predates `test_sql_by_cci` reports that suite as not observed.
+`test_sql_by_cci` is opt-in: without `--suite`, `collect`, `collect-commit`,
+`collect-base`, and `verify` use the other three suites, because develop
+commits carry no `test_sql_by_cci` status and a default request would leave
+every merge-base baseline incomplete. Pass `--suite test_sql_by_cci` to add it.
 
 ## Requirements
 

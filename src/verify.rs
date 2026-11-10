@@ -231,11 +231,7 @@ pub fn run(args: &VerifyArgs) -> Result<VerificationReport, AppError> {
     let pins = Pins {
         pr: args.pr.as_deref().map(pr_number).transpose()?,
         head: args.pr_head.as_deref().map(validate_full_sha).transpose()?,
-        suites: if args.suite.is_empty() {
-            Suite::ALL.into_iter().collect()
-        } else {
-            args.suite.iter().copied().collect()
-        },
+        suites: Suite::requested(&args.suite).into_iter().collect(),
         since: args.since,
     };
     let saved = fs::read(&args.result).map_err(|error| {

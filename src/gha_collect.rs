@@ -234,10 +234,7 @@ pub async fn run_with_progress(
     args: &CollectArgs,
     progress: &dyn CollectProgress,
 ) -> Result<CollectResult, AppError> {
-    let requested_suites = Suite::ALL
-        .into_iter()
-        .filter(|suite| args.suite.is_empty() || args.suite.contains(suite))
-        .collect::<Vec<_>>();
+    let requested_suites = Suite::requested(&args.suite);
     let total_suites = requested_suites.len();
     progress.report(ProgressEvent::Starting {
         total: total_suites,
@@ -275,10 +272,7 @@ pub(crate) async fn collect_selected(
     selected_commit: String,
     progress: &dyn CollectProgress,
 ) -> Result<CollectResult, AppError> {
-    let requested_suites = Suite::ALL
-        .into_iter()
-        .filter(|suite| args.suite.is_empty() || args.suite.contains(suite))
-        .collect::<Vec<_>>();
+    let requested_suites = Suite::requested(&args.suite);
     let total_suites = requested_suites.len();
     let config = ResolvedConfig::load(ConfigOverride {
         data_dir: args.data_dir.clone(),

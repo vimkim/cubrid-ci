@@ -67,7 +67,7 @@ fn terminal_collection_publishes_an_append_only_observation() {
     assert_eq!(request["commit"], SHA);
     assert_eq!(
         request["requested_suites"],
-        json!(["test_medium", "test_sql", "test_shell", "test_sql_by_cci"])
+        json!(["test_medium", "test_sql", "test_shell"])
     );
     assert_eq!(request["fetch_concurrency"]["value"], 40);
     assert_eq!(request["fetch_concurrency"]["source"], "default");
