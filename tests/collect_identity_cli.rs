@@ -159,6 +159,113 @@ exit 1"#,
 }
 
 #[test]
+fn retained_abnormal_job_log_is_not_downloaded_again() {
+    let mut snapshot = status_snapshot(SHA, true);
+    snapshot["checks"][0]["current"]["state"] = json!("FAILURE");
+    let fixture = Fixture::new(snapshot);
+    let raw = fixture
+        .manifest_path(SHA)
+        .parent()
+        .unwrap()
+        .join("providers/github-actions/runs/123/attempts/2/test_medium/raw/github");
+    fs::create_dir_all(&raw).unwrap();
+    fs::write(raw.join("job-100.log"), "retained cancelled-job log\n").unwrap();
+    let calls = fixture.commands.path().join("gh-calls");
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"printf '%s\n' "$*" >> '{}'
+case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":100,"name":"shard medium 00","run_attempt":2,"conclusion":"cancelled"}}]}}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *actions/jobs/100/logs*) printf '%s\n' 'retained cancelled-job log' ;;
+  *) exit 64 ;;
+esac"#,
+            calls.display()
+        ),
+    );
+
+    let output = fixture
+        .command(&["--suite", "test_medium"])
+        .output()
+        .unwrap();
+
+    assert_eq!(output.status.code(), Some(3));
+    let calls = fs::read_to_string(calls).unwrap();
+    assert!(
+        !calls.contains("actions/jobs/100/logs"),
+        "retained abnormal job log was requested again:\n{calls}"
+    );
+}
+
+#[test]
+fn hanging_job_log_records_incomplete_acquisition_and_verifies_offline() {
+    for close_stdout in [false, true] {
+        let mut snapshot = status_snapshot(SHA, true);
+        snapshot["checks"][0]["current"]["state"] = json!("FAILURE");
+        let fixture = Fixture::new(snapshot);
+        let hang = if close_stdout {
+            "exec /bin/sleep 2 >/dev/null"
+        } else {
+            "exec /bin/sleep 2"
+        };
+        write_command(
+            fixture.commands.path(),
+            "gh",
+            &format!(
+                r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":100,"name":"collect","run_attempt":2,"conclusion":"success"}}]}}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *actions/jobs/100/logs*) {hang} ;;
+  *) exit 64 ;;
+esac"#
+            ),
+        );
+
+        let output = fixture
+            .command(&["--suite", "test_medium"])
+            .env("CUBRID_CI_GH_TIMEOUT", "100ms")
+            .output()
+            .unwrap();
+
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(output.status.code(), Some(5), "{result:#}");
+        assert_eq!(result["ok"], false);
+        assert_eq!(
+            result["suites"]["test_medium"]["state"],
+            "collection_failed"
+        );
+        assert!(result["suites"]["test_medium"]["summary"].is_null());
+        let message = result["errors"][0]["message"].as_str().unwrap();
+        assert!(message.contains("timed out"), "{message}");
+        assert!(message.contains("actions/jobs/100/logs"), "{message}");
+        assert_eq!(fixture.manifest(), result);
+        let saved = fixture.data.path().join("result.json");
+        fs::write(&saved, &output.stdout).unwrap();
+        let offline = fixture.data.path().join("offline-bin");
+        fs::create_dir(&offline).unwrap();
+        let verification = Command::new(env!("CARGO_BIN_EXE_cubrid-ci"))
+            .env("PATH", offline)
+            .env("CUBRID_CI_CONFIG", missing_config_path())
+            .args(["verify", "--json", "--suite", "test_medium"])
+            .arg(saved)
+            .output()
+            .unwrap();
+        let report: Value = serde_json::from_slice(&verification.stdout).unwrap();
+        assert_eq!(verification.status.code(), Some(3), "{report:#}");
+        assert_eq!(report["assessment"]["observation"], "incomplete");
+        assert_eq!(
+            report["suites"]["test_medium"]["state"],
+            "collection_failed"
+        );
+        assert_eq!(report["suites"]["test_medium"]["summary"], "absent");
+    }
+}
+
+#[test]
 fn explicit_pr_requires_full_commit() {
     let fixture = Fixture::new(status_snapshot(SHA, false));
 
