@@ -1,9 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::{Read, Write};
+use std::os::fd::AsRawFd;
+use std::os::unix::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use futures_util::{StreamExt, TryStreamExt, stream};
 use regex::Regex;
@@ -434,6 +437,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "plan metadata",
             false,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -460,6 +464,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "planned-shard index",
             false,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -485,6 +490,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "plan table",
             false,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -515,6 +521,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "collector failure inventory",
             true,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -534,6 +541,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "collector verdict",
             true,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -554,6 +562,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             &provider_raw,
             "published-shard index",
             true,
+            &run_context.diagnostic_logs,
         ),
         request.acquisition,
         request.suite,
@@ -601,6 +610,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             format!("terminal {} suite has no shard directories", request.suite),
             &resolution.jobs,
             &provider_raw,
+            &run_context.diagnostic_logs,
         );
     }
     if shard_names != planned_shards || shard_names.len() as u64 != plan.parallelism {
@@ -613,6 +623,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             ),
             &resolution.jobs,
             &provider_raw,
+            &run_context.diagnostic_logs,
         );
     }
     if plan_table.keys().cloned().collect::<Vec<_>>() != planned_shards {
@@ -626,6 +637,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         let client = &client;
         let fetch_permits = request.fetch_permits;
         let jobs = &resolution.jobs;
+        let diagnostic_logs = &run_context.diagnostic_logs;
         let provider_raw = &provider_raw;
         async move {
             let shard_name = shard.clone();
@@ -645,6 +657,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                         provider_raw,
                         &format!("shard {shard} build provenance"),
                         false,
+                        diagnostic_logs,
                     ),
                 )?;
                 at_fetch_stage(
@@ -662,6 +675,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                         provider_raw,
                         &format!("shard {shard} testcase provenance"),
                         false,
+                        diagnostic_logs,
                     ),
                 )?;
                 if let Some(result_file) = layout.shard_result.file() {
@@ -680,6 +694,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                             provider_raw,
                             &format!("shard {shard} workflow result"),
                             true,
+                            diagnostic_logs,
                         ),
                     )?;
                 }
@@ -698,6 +713,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                         provider_raw,
                         &format!("shard {shard} completion record"),
                         true,
+                        diagnostic_logs,
                     ),
                 )?;
                 let results_index = at_fetch_stage(
@@ -715,6 +731,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                         provider_raw,
                         &format!("shard {shard} test-result index"),
                         true,
+                        diagnostic_logs,
                     ),
                 )?;
                 let junit_names = at_stage(
@@ -731,6 +748,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                             format!("shard {shard} has no {suite} JUnit XML"),
                             jobs,
                             provider_raw,
+                            diagnostic_logs,
                         ),
                     );
                 }
@@ -967,7 +985,12 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
             {
                 Ok(assigned) => assigned,
                 Err(AppError::JobLevel(message)) => {
-                    return job_level_failure(message, &resolution.jobs, &provider_raw);
+                    return job_level_failure(
+                        message,
+                        &resolution.jobs,
+                        &provider_raw,
+                        &run_context.diagnostic_logs,
+                    );
                 }
                 Err(error) => return Err(error),
             };
@@ -988,6 +1011,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
                 ),
                 &resolution.jobs,
                 &provider_raw,
+                &run_context.diagnostic_logs,
             );
         }
         workflow_passed += shard_counts.passed;
@@ -1901,6 +1925,7 @@ pub(crate) struct RunContext {
     jobs: Vec<ActionJob>,
     job_pages: Vec<(String, Vec<u8>)>,
     collect_log: Option<Vec<u8>>,
+    diagnostic_logs: DiagnosticLogs,
 }
 
 pub(crate) type RunContextCache = Mutex<Option<Result<Arc<RunContext>, Arc<AppError>>>>;
@@ -1954,7 +1979,7 @@ fn load_run_context(
         .find(|job| job.name == "collect")
         .map(Ok)
         .unwrap_or_else(|| {
-            retain_abnormal_job_logs(&diagnostic_jobs, provider_raw)?;
+            retain_abnormal_job_logs(&diagnostic_jobs, provider_raw, &DiagnosticLogs::default())?;
             Err(AppError::JobLevel(format!(
                 "Actions run {run_id} attempt {attempt} has no collect job"
             )))
@@ -1965,14 +1990,16 @@ fn load_run_context(
             jobs: selected_jobs,
             job_pages,
             collect_log: None,
+            diagnostic_logs: DiagnosticLogs::default(),
         });
     }
     let collect_job_id = collect_job.id;
     let logs_endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{collect_job_id}/logs");
     let output = match gh_job_log(&logs_endpoint) {
         Ok(output) => output,
+        Err(error @ AppError::Input(_)) => return Err(error),
         Err(error) if job_is_abnormal(collect_job) => {
-            write_string_immutable(
+            write_string_if_absent(
                 &provider_raw.join(format!("github/job-{collect_job_id}-log-error.txt")),
                 &error.to_string(),
             )?;
@@ -2016,6 +2043,7 @@ fn load_run_context(
         jobs: selected_jobs,
         job_pages,
         collect_log: Some(output),
+        diagnostic_logs: DiagnosticLogs::default(),
     })
 }
 
@@ -2084,6 +2112,7 @@ fn classify_pipeline_fetch(
     provider_raw: &Path,
     stage: &str,
     terminal_required: bool,
+    diagnostic_logs: &DiagnosticLogs,
 ) -> Result<String, FetchFailure> {
     match result {
         Ok(value) => Ok(value),
@@ -2091,7 +2120,7 @@ fn classify_pipeline_fetch(
             if jobs.iter().any(job_is_abnormal)
                 || (terminal_required && matches!(&failure.error, AppError::Unavailable(_))) =>
         {
-            if let Err(error) = retain_abnormal_job_logs(jobs, provider_raw) {
+            if let Err(error) = retain_abnormal_job_logs(jobs, provider_raw, diagnostic_logs) {
                 failure.error = error;
                 return Err(failure);
             }
@@ -2126,8 +2155,9 @@ fn job_level_failure<T>(
     message: String,
     jobs: &[ActionJob],
     provider_raw: &Path,
+    diagnostic_logs: &DiagnosticLogs,
 ) -> Result<T, AppError> {
-    retain_abnormal_job_logs(jobs, provider_raw)?;
+    retain_abnormal_job_logs(jobs, provider_raw, diagnostic_logs)?;
     Err(AppError::JobLevel(message))
 }
 
@@ -2155,18 +2185,60 @@ fn job_is_relevant_to_suite(job: &ActionJob, suite: &str) -> bool {
     name == "collect" && job.conclusion.as_deref() != Some("failure")
 }
 
-fn retain_abnormal_job_logs(jobs: &[ActionJob], provider_raw: &Path) -> Result<(), AppError> {
+#[derive(Default)]
+struct DiagnosticLogs(Mutex<BTreeMap<u64, DiagnosticLog>>);
+
+enum DiagnosticLog {
+    Available(PathBuf),
+    Unavailable(String),
+}
+
+fn retain_abnormal_job_logs(
+    jobs: &[ActionJob],
+    provider_raw: &Path,
+    diagnostic_logs: &DiagnosticLogs,
+) -> Result<(), AppError> {
+    let mut cached = diagnostic_logs
+        .0
+        .lock()
+        .map_err(|_| AppError::Remote("shared diagnostic log cache lock poisoned".to_owned()))?;
     for job in jobs.iter().filter(|job| job_is_abnormal(job)) {
-        let endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{}/logs", job.id);
-        match gh_job_log(&endpoint) {
-            Ok(log) => write_string_immutable(
-                &provider_raw.join(format!("github/job-{}.log", job.id)),
-                &sanitize_log(&String::from_utf8_lossy(&log)),
-            )?,
-            Err(error) => write_string_immutable(
+        let log_path = provider_raw.join(format!("github/job-{}.log", job.id));
+        if log_path.exists() {
+            read_bounded_text(&log_path, MAX_GITHUB_LOG_BYTES)?;
+            cached
+                .entry(job.id)
+                .or_insert(DiagnosticLog::Available(log_path));
+            continue;
+        }
+        match cached.get(&job.id) {
+            Some(DiagnosticLog::Available(path)) => {
+                let log = read_bounded_text(path, MAX_GITHUB_LOG_BYTES)?;
+                write_string_immutable(&log_path, &log)?;
+            }
+            Some(DiagnosticLog::Unavailable(error)) => write_string_if_absent(
                 &provider_raw.join(format!("github/job-{}-log-error.txt", job.id)),
-                &error.to_string(),
+                error,
             )?,
+            None => {
+                let endpoint = format!("repos/CUBRID/cubrid/actions/jobs/{}/logs", job.id);
+                match gh_job_log(&endpoint) {
+                    Ok(log) => {
+                        let log = sanitize_log(&String::from_utf8_lossy(&log));
+                        write_string_immutable(&log_path, &log)?;
+                        cached.insert(job.id, DiagnosticLog::Available(log_path));
+                    }
+                    Err(error @ AppError::Input(_)) => return Err(error),
+                    Err(error) => {
+                        let error = error.to_string();
+                        write_string_if_absent(
+                            &provider_raw.join(format!("github/job-{}-log-error.txt", job.id)),
+                            &error,
+                        )?;
+                        cached.insert(job.id, DiagnosticLog::Unavailable(error));
+                    }
+                }
+            }
         }
     }
     Ok(())
@@ -2236,37 +2308,129 @@ fn gh_job_log(endpoint: &str) -> Result<Vec<u8>, AppError> {
 }
 
 fn bounded_gh_output(args: &[&str], endpoint: &str, limit: usize) -> Result<Vec<u8>, AppError> {
+    let timeout_text = match std::env::var("CUBRID_CI_GH_TIMEOUT") {
+        Ok(value) => value,
+        Err(std::env::VarError::NotPresent) => "120s".to_owned(),
+        Err(error) => {
+            return Err(AppError::Input(format!(
+                "invalid CUBRID_CI_GH_TIMEOUT: {error}"
+            )));
+        }
+    };
+    let timeout = humantime::parse_duration(&timeout_text)
+        .map_err(|error| AppError::Input(format!("invalid CUBRID_CI_GH_TIMEOUT: {error}")))?;
+    let deadline = Instant::now()
+        .checked_add(timeout)
+        .filter(|_| !timeout.is_zero())
+        .ok_or_else(|| {
+            AppError::Input(
+                "CUBRID_CI_GH_TIMEOUT must be a positive, representable duration".to_owned(),
+            )
+        })?;
     let mut child = Command::new("gh")
         .args(args)
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
+        .process_group(0)
         .spawn()
         .map_err(|error| AppError::Remote(format!("failed to execute gh: {error}")))?;
-    let mut bytes = Vec::new();
-    child
-        .stdout
-        .take()
-        .expect("stdout is piped")
-        .take((limit + 1) as u64)
-        .read_to_end(&mut bytes)
-        .map_err(|error| AppError::Remote(format!("read gh output for {endpoint}: {error}")))?;
-    if bytes.len() > limit {
+    let mut stdout = child.stdout.take().expect("stdout is piped");
+    let result = (|| {
+        let flags = unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_GETFL) };
+        if flags == -1
+            || unsafe { libc::fcntl(stdout.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) }
+                == -1
+        {
+            return Err(AppError::Remote(format!(
+                "configure gh output for {endpoint}: {}",
+                std::io::Error::last_os_error()
+            )));
+        }
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 64 * 1024];
+        let mut eof = false;
+        let mut status = None;
+        loop {
+            if Instant::now() >= deadline {
+                return Err(AppError::Remote(format!(
+                    "gh output for {endpoint} timed out after {timeout_text}"
+                )));
+            }
+            let mut read_progress = false;
+            if !eof {
+                let count = buffer.len().min(limit + 1 - bytes.len());
+                match stdout.read(&mut buffer[..count]) {
+                    Ok(0) => eof = true,
+                    Ok(n) => {
+                        read_progress = true;
+                        bytes.extend_from_slice(&buffer[..n]);
+                        if bytes.len() > limit {
+                            return Err(AppError::Oversized(format!(
+                                "gh output for {endpoint} exceeds the {limit}-byte limit"
+                            )));
+                        }
+                    }
+                    Err(error)
+                        if error.kind() == std::io::ErrorKind::WouldBlock
+                            || error.kind() == std::io::ErrorKind::Interrupted => {}
+                    Err(error) => {
+                        return Err(AppError::Remote(format!(
+                            "read gh output for {endpoint}: {error}"
+                        )));
+                    }
+                }
+            }
+            if status.is_none() {
+                status = child
+                    .try_wait()
+                    .map_err(|error| AppError::Remote(format!("wait for gh: {error}")))?;
+            }
+            if let Some(status) = status {
+                if !status.success() {
+                    return Err(AppError::Remote(format!(
+                        "gh api failed for {endpoint} with {status}"
+                    )));
+                }
+                if eof {
+                    return Ok(bytes);
+                }
+            }
+            if !read_progress {
+                std::thread::sleep(
+                    Duration::from_millis(10)
+                        .min(deadline.saturating_duration_since(Instant::now())),
+                );
+            }
+        }
+    })();
+    drop(stdout);
+    if let Err(original) = result {
+        // gh is the leader of a new process group, so descendants holding stdout are stopped too.
+        unsafe { libc::kill(-(child.id() as libc::pid_t), libc::SIGKILL) };
         let _ = child.kill();
-        let _ = child.wait();
-        return Err(AppError::Oversized(format!(
-            "gh output for {endpoint} exceeds the {limit}-byte limit"
-        )));
+        let cleanup_deadline = Instant::now() + Duration::from_secs(1);
+        loop {
+            match child.try_wait() {
+                Ok(Some(_)) => return Err(original),
+                Err(error) => {
+                    return Err(AppError::Remote(format!(
+                        "{original}; failed to reap gh process {}: {error}",
+                        child.id()
+                    )));
+                }
+                Ok(None) if Instant::now() >= cleanup_deadline => {
+                    return Err(AppError::Remote(format!(
+                        "{original}; failed to reap gh process {} within 1s",
+                        child.id()
+                    )));
+                }
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
     }
-    let status = child
-        .wait()
-        .map_err(|error| AppError::Remote(format!("wait for gh: {error}")))?;
-    if !status.success() {
-        return Err(AppError::Remote(format!(
-            "gh api failed for {endpoint} with {status}"
-        )));
-    }
-    Ok(bytes)
+
+    result
 }
 
 async fn fetch_text(
@@ -2415,7 +2579,10 @@ async fn fetch_text(
 }
 
 fn read_bounded_text(path: &Path, limit: usize) -> Result<String, AppError> {
-    let bytes = fs::read(path).map_err(|source| AppError::storage(path, source))?;
+    let mut bytes = Vec::new();
+    fs::File::open(path)
+        .and_then(|file| file.take((limit + 1) as u64).read_to_end(&mut bytes))
+        .map_err(|source| AppError::storage(path, source))?;
     if bytes.len() > limit {
         return Err(AppError::Integrity(format!(
             "retained evidence exceeds its {limit}-byte limit: {}",

@@ -18,6 +18,7 @@ futures-util = "0.3"
 hex = "0.4"
 humantime = "2.3"
 jsonschema = { version = "0.48", default-features = false }
+libc = "0.2"
 regex = "1.12"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "stream"] }
 roxmltree = "0.20"
@@ -34,7 +35,6 @@ url = "2"
 walkdir = "2"
 
 [dev-dependencies]
-libc = "0.2"
 wiremock = "0.6"
 
 [profile.release]

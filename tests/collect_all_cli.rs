@@ -287,6 +287,91 @@ async fn configured_fetch_concurrency_is_shared_across_suites() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn diagnostic_timeout_is_reused_within_a_run_and_retried_next_time() {
+    let server = MockServer::start().await;
+    mount_medium_shards(&server, 4, None, &["01", "02"]).await;
+    let commands = tempfile::tempdir().unwrap();
+    write_commands(commands.path(), &server);
+    let calls = commands.path().join("diagnostic-calls");
+    write_command(
+        commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/200/jobs*) printf '%s\n' '{{"jobs":[{{"id":920,"name":"collect","run_attempt":1}},{{"id":921,"name":"shard medium 01","run_attempt":1,"conclusion":"failure"}}]}}' ;;
+  *actions/jobs/920/logs*) printf '%s\n' 'ARTIFACT_URL_BASE: {}' ;;
+  *actions/jobs/921/logs*)
+    if [ -f '{}' ]; then printf '%s\n' 'diagnostic log'; else printf 'first\n' > '{}'; exec /bin/sleep 2; fi
+    printf 'retry\n' >> '{}' ;;
+  *actions/runs/200*) printf '%s\n' '{{"id":200,"run_attempt":1}}' ;;
+  *) exit 64 ;;
+esac"#,
+            server.uri(),
+            calls.display(),
+            calls.display(),
+            calls.display()
+        ),
+    );
+    let data = tempfile::tempdir().unwrap();
+    let run = || {
+        command(commands.path(), data.path())
+            .args([
+                "--suite",
+                "test_medium",
+                "--fetch-concurrency",
+                "4",
+                "--json",
+            ])
+            .env("CUBRID_CI_GH_TIMEOUT", "100ms")
+            .output()
+            .unwrap()
+    };
+
+    let first = run();
+    let result: Value = serde_json::from_slice(&first.stdout).unwrap();
+    assert_eq!(first.status.code(), Some(3), "{result:#}");
+    assert_eq!(
+        result["suites"]["test_medium"]["state"],
+        "job_level_failure"
+    );
+    assert!(result["suites"]["test_medium"]["summary"].is_null());
+    let suite = PathBuf::from(result["output_dir"].as_str().unwrap())
+        .join("providers/github-actions/runs/200/attempts/1/test_medium");
+    let receipt = suite.join("raw/github/job-921-log-error.txt");
+    let original_receipt = fs::read_to_string(&receipt).unwrap();
+    assert!(original_receipt.contains("timed out"));
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "first\n");
+    let observation =
+        fs::read_dir(PathBuf::from(result["output_dir"].as_str().unwrap()).join("observations"))
+            .unwrap()
+            .next()
+            .unwrap()
+            .unwrap()
+            .path();
+    let observed: Value =
+        serde_json::from_slice(&fs::read(observation.join("result.json")).unwrap()).unwrap();
+    assert_eq!(
+        observed["acquisition"]["test_medium"]["shards"]["01"]["state"],
+        "failed"
+    );
+    assert_eq!(
+        observed["acquisition"]["test_medium"]["shards"]["02"]["state"],
+        "failed"
+    );
+
+    let second = run();
+    let result: Value = serde_json::from_slice(&second.stdout).unwrap();
+    assert_eq!(second.status.code(), Some(3), "{result:#}");
+    assert_eq!(fs::read_to_string(&calls).unwrap(), "first\nretry\n");
+    assert_eq!(fs::read_to_string(receipt).unwrap(), original_receipt);
+    assert_eq!(
+        fs::read_to_string(suite.join("raw/github/job-921.log")).unwrap(),
+        "diagnostic log\n"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn completed_shard_raw_evidence_survives_a_later_shard_failure() {
     let server = MockServer::start().await;
     mount_medium_shards(&server, 12, None, &["01", "02"]).await;

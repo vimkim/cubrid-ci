@@ -62,6 +62,10 @@ cubrid-ci verify empty.json --pr 7990 --pr-head <sha> \
   --since 2026-11-03T08:00:00Z --json
 ```
 
+GitHub job log and job-list requests time out after 120 seconds. Set
+`CUBRID_CI_GH_TIMEOUT` to a positive duration such as `30s` to change this limit.
+The `--timeout` option controls only the wait for suite completion.
+
 All commands accept `--json`. A fully collected red suite exits successfully:
 CI outcome is data, while the process exit reports collection completeness and
 trustworthiness.

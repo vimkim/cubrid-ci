@@ -2,7 +2,7 @@ use std::fs;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -202,14 +202,22 @@ esac"#,
 
 #[test]
 fn hanging_job_log_records_incomplete_acquisition_and_verifies_offline() {
-    for close_stdout in [false, true] {
+    for mode in ["open", "closed", "inherited", "streaming"] {
         let mut snapshot = status_snapshot(SHA, true);
         snapshot["checks"][0]["current"]["state"] = json!("FAILURE");
         let fixture = Fixture::new(snapshot);
-        let hang = if close_stdout {
-            "exec /bin/sleep 2 >/dev/null"
-        } else {
-            "exec /bin/sleep 2"
+        let descendant_pid = fixture.commands.path().join("descendant-pid");
+        let hang = match mode {
+            "closed" => "exec /bin/sleep 2 >/dev/null".to_owned(),
+            "inherited" => format!(
+                "/bin/sleep 2 & printf '%s' \"$!\" > '{}'; exit 0",
+                descendant_pid.display()
+            ),
+            "streaming" => {
+                "i=0; while [ \"$i\" -lt 500000 ]; do printf 'still running\\n'; i=$((i+1)); done"
+                    .to_owned()
+            }
+            _ => "exec /bin/sleep 2".to_owned(),
         };
         write_command(
             fixture.commands.path(),
@@ -225,12 +233,32 @@ esac"#
             ),
         );
 
+        let start = Instant::now();
         let output = fixture
             .command(&["--suite", "test_medium"])
             .env("CUBRID_CI_GH_TIMEOUT", "100ms")
             .output()
             .unwrap();
 
+        assert!(
+            start.elapsed() < Duration::from_secs(2),
+            "mode {mode} exceeded the deadline"
+        );
+        if mode == "inherited" {
+            let pid = fs::read_to_string(descendant_pid).unwrap();
+            let deadline = Instant::now() + Duration::from_secs(1);
+            loop {
+                let stat = fs::read_to_string(format!("/proc/{pid}/stat"));
+                if stat.is_err() || stat.unwrap().split_whitespace().nth(2) == Some("Z") {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "descendant {pid} is still running"
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
+        }
         let result: Value = serde_json::from_slice(&output.stdout).unwrap();
         assert_eq!(output.status.code(), Some(5), "{result:#}");
         assert_eq!(result["ok"], false);
@@ -263,6 +291,39 @@ esac"#
         );
         assert_eq!(report["suites"]["test_medium"]["summary"], "absent");
     }
+}
+
+#[test]
+fn oversized_job_log_remains_an_acquisition_failure() {
+    let mut snapshot = status_snapshot(SHA, true);
+    snapshot["checks"][0]["current"]["state"] = json!("FAILURE");
+    let fixture = Fixture::new(snapshot);
+    write_command(
+        fixture.commands.path(),
+        "gh",
+        &format!(
+            r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{{"number":7990,"head":{{"sha":"{SHA}"}}}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{{"jobs":[{{"id":100,"name":"collect","run_attempt":2,"conclusion":"success"}}]}}' ;;
+  *actions/runs/123*) printf '%s\n' '{{"id":123,"run_attempt":2}}' ;;
+  *actions/jobs/100/logs*) exec /usr/bin/head -c 33554433 /dev/zero ;;
+  *) exit 64 ;;
+esac"#
+        ),
+    );
+    let output = fixture
+        .command(&["--suite", "test_medium"])
+        .env("CUBRID_CI_GH_TIMEOUT", "5s")
+        .output()
+        .unwrap();
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(output.status.code(), Some(5), "{result:#}");
+    assert_eq!(
+        result["suites"]["test_medium"]["state"],
+        "collection_failed"
+    );
+    assert_eq!(result["errors"][0]["diagnostic"], "oversized");
+    assert!(result["suites"]["test_medium"]["summary"].is_null());
 }
 
 #[test]
