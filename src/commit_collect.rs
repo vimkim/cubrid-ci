@@ -266,7 +266,7 @@ async fn collect(
                 current: Some(StatusIdentity {
                     state,
                     reported_for_sha: commit.to_owned(),
-                    detail_url: candidate.detail_url.clone(),
+                    detail_url: Some(candidate.detail_url.clone()),
                     reported_at: candidate.reported_at,
                 }),
             });

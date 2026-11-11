@@ -100,7 +100,7 @@ pub enum SuiteState {
 pub struct StatusIdentity {
     pub state: String,
     pub reported_for_sha: String,
-    pub detail_url: String,
+    pub detail_url: Option<String>,
     pub reported_at: DateTime<Utc>,
 }
 
@@ -482,7 +482,11 @@ fn pin_execution(
             "suite status does not identify the selected commit".to_owned(),
         )));
     }
-    Some(actions_run_id(&status.detail_url).and_then(|run_id| {
+    let detail_url = status
+        .detail_url
+        .as_deref()
+        .ok_or_else(|| AppError::Integrity("suite status has no Actions URL".to_owned()));
+    Some(detail_url.and_then(actions_run_id).and_then(|run_id| {
         let run = match pinned_runs.get(&run_id) {
             Some(run) => run.clone(),
             None => {

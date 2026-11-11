@@ -37,6 +37,37 @@ fn current_directory_collection_selects_head_and_publishes_partial_manifest() {
 }
 
 #[test]
+fn a_non_actions_check_without_a_detail_url_does_not_block_collection() {
+    let mut snapshot = status_snapshot(SHA, true);
+    snapshot["checks"].as_array_mut().unwrap().push(json!({
+        "name": "continuous-integration/appveyor/pr",
+        "provider": "Other checks",
+        "expected": false,
+        "freshness": "current",
+        "current": {
+            "state": "FAILURE",
+            "reported_for_sha": SHA,
+            "detail_url": null,
+            "reported_at": "2026-09-21T18:10:04Z"
+        },
+        "previous": null
+    }));
+    let fixture = Fixture::new(snapshot);
+
+    let output = fixture.command(&[]).output().unwrap();
+
+    assert_eq!(
+        output.status.code(),
+        Some(3),
+        "stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_medium"]["state"], "running");
+    assert_eq!(result["suites"]["test_medium"]["execution"]["run_id"], 123);
+}
+
+#[test]
 fn terminal_collection_publishes_an_append_only_observation() {
     let fixture = Fixture::new(status_snapshot(SHA, true));
 
