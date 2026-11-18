@@ -97,7 +97,7 @@
         },
         "path": {
           "type": "string",
-          "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|shell)/summary\\.json$"
+          "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|sql_by_cci|shell)/summary\\.json$"
         },
         "rerun_sources": {
           "type": "array",
@@ -118,7 +118,7 @@
               },
               "path": {
                 "type": "string",
-                "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|shell)/summary\\.json$"
+                "pattern": "^providers/github-actions/runs/[0-9]+/attempts/[0-9]+/test_(medium|sql|sql_by_cci|shell)/summary\\.json$"
               }
             },
             "additionalProperties": false
