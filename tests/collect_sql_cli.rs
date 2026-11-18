@@ -884,6 +884,39 @@ esac"#,
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn prefixed_failed_shard_diagnostics_exclude_other_suites() {
+    let commands = tempfile::tempdir().unwrap();
+    write_command(
+        commands.path(),
+        "cubrid-pr-status",
+        &format!(
+            "/bin/cat <<'JSON'\n{}\nJSON",
+            serde_json::to_string(&status_snapshot()).unwrap()
+        ),
+    );
+    write_command(
+        commands.path(),
+        "gh",
+        r#"case "$*" in
+  *pulls/7990*) printf '%s\n' '{"number":7990,"head":{"sha":"1111111111111111111111111111111111111111"}}' ;;
+  *actions/runs/123/jobs*) printf '%s\n' '{"jobs":[{"id":901,"name":"shell / shard shell 09","run_attempt":2,"conclusion":"failure"},{"id":902,"name":"sql / shard sql 00","run_attempt":2,"conclusion":"failure"}]}' ;;
+  *actions/jobs/901/logs*|*actions/jobs/902/logs*) printf '%s\n' 'shard failed' ;;
+  *actions/runs/123*) printf '%s\n' '{"id":123,"run_attempt":2}' ;;
+  *) exit 64 ;;
+esac"#,
+    );
+    let data = tempfile::tempdir().unwrap();
+    let output = command(commands.path(), data.path()).output().unwrap();
+    assert_eq!(output.status.code(), Some(3));
+    let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(result["suites"]["test_sql"]["state"], "job_level_failure");
+    let raw = PathBuf::from(result["output_dir"].as_str().unwrap())
+        .join("providers/github-actions/runs/123/attempts/2/test_sql/raw/github");
+    assert!(raw.join("job-902.log").exists());
+    assert!(!raw.join("job-901.log").exists());
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn unrelated_attempt_and_suite_failures_do_not_reclassify_a_transport_error() {
     let server = MockServer::start().await;
     mount_evidence(
@@ -1624,6 +1657,15 @@ esac"#,
 
 #[tokio::test(flavor = "multi_thread")]
 async fn junit_only_sql_by_cci_suite_is_collected_and_verified_offline() {
+    collect_sql_by_cci(false).await;
+}
+
+#[tokio::test(flavor = "multi_thread")]
+async fn prefixed_sql_by_cci_suite_is_collected_and_verified_offline() {
+    collect_sql_by_cci(true).await;
+}
+
+async fn collect_sql_by_cci(prefixed: bool) {
     let server = MockServer::start().await;
     let failed = "sql/_01_object/cases/a.sql";
     let message = concat!(
@@ -1701,6 +1743,14 @@ async fn junit_only_sql_by_cci_suite_is_collected_and_verified_offline() {
         ),
     );
     write_gh_command(commands.path(), &server);
+    if prefixed {
+        let gh = commands.path().join("gh");
+        let script = fs::read_to_string(&gh).unwrap().replace(
+            r#"{"id":900,"name":"collect","run_attempt":2}"#,
+            r#"{"id":899,"name":"sql / collect","run_attempt":2},{"id":900,"name":"sql_by_cci / collect","run_attempt":2}"#,
+        );
+        fs::write(gh, script).unwrap();
+    }
     let data = tempfile::tempdir().unwrap();
 
     let output = suite_command(commands.path(), data.path(), "test_sql_by_cci")

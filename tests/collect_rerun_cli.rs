@@ -65,6 +65,34 @@ async fn rerun_collects_carried_suites_and_three_passing_shell_cases() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn prefixed_collect_jobs_support_shell_and_sql_reruns_with_configured_base() {
+    for (suite, remote) in [("test_shell", "shell"), ("test_sql", "sql")] {
+        let fixture = Fixture::new().await;
+        let jobs = fixture.commands.path().join("prefixed-jobs.json");
+        fs::write(&jobs, format!(r#"{{"jobs":[{{"id":999,"name":"other / collect","run_attempt":1}},{{"id":121614144713,"name":"{remote} / collect","run_attempt":1}}]}}"#)).unwrap();
+        let gh = fixture.commands.path().join("gh");
+        let original =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/pr7990-rerun/jobs.json");
+        let script = fs::read_to_string(&gh)
+            .unwrap()
+            .replace(original.to_str().unwrap(), jobs.to_str().unwrap());
+        fs::write(gh, script).unwrap();
+        let output = fixture
+            .command(&[suite])
+            .env("CUBRID_CI_ARTIFACT_BASE", fixture.server.uri())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{suite}: {}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        let result: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(result["suites"][suite]["state"], "completed");
+    }
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn rerun_cannot_reference_itself() {
     let fixture = Fixture::new().await;
     let gh = fixture.commands.path().join("gh");
