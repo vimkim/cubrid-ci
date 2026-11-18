@@ -444,7 +444,7 @@ pub(crate) async fn collect_suite(request: SuiteRequest<'_>) -> Result<SuiteSumm
         AcquisitionStage::PlanMetadata,
     )?;
     let plan = parse_split_meta(&split_meta)?;
-    let source_run = rerun_source_run(&run_context, &plan, &provider_raw)?;
+    let source_run = rerun_source_run(&run_context, &plan, &provider_raw, layout.remote_name)?;
     let source = if let Some(source_run) = source_run {
         Some(collect_rerun_source(&request, source_run, &provider_raw).await?)
     } else {
@@ -1284,6 +1284,7 @@ fn rerun_source_run(
     context: &RunContext,
     plan: &SqlPlan,
     raw: &Path,
+    suite: &str,
 ) -> Result<Option<u64>, AppError> {
     let log = if let Some(log) = &context.collect_log {
         String::from_utf8_lossy(log).into_owned()
@@ -1291,7 +1292,7 @@ fn rerun_source_run(
         let job = context
             .jobs
             .iter()
-            .find(|job| job.name == "collect")
+            .find(|job| suite_job_name(&job.name, suite) == "collect")
             .ok_or_else(|| {
                 AppError::Unavailable("rerun source requires a collect-job log".to_owned())
             })?;
@@ -1976,7 +1977,7 @@ fn load_run_context(
         .collect::<Vec<_>>();
     let collect_job = selected_jobs
         .iter()
-        .find(|job| job.name == "collect")
+        .find(|job| suite_job_name(&job.name, suite) == "collect")
         .map(Ok)
         .unwrap_or_else(|| {
             retain_abnormal_job_logs(&diagnostic_jobs, provider_raw, &DiagnosticLogs::default())?;
@@ -2168,8 +2169,14 @@ fn job_is_abnormal(job: &ActionJob) -> bool {
     )
 }
 
+fn suite_job_name<'a>(name: &'a str, suite: &str) -> &'a str {
+    name.strip_prefix(suite)
+        .and_then(|name| name.strip_prefix(" / "))
+        .unwrap_or(name)
+}
+
 fn job_is_relevant_to_suite(job: &ActionJob, suite: &str) -> bool {
-    let name = job.name.to_ascii_lowercase();
+    let name = suite_job_name(&job.name, suite).to_ascii_lowercase();
     let suite = suite.to_ascii_lowercase();
     if name.starts_with(&format!("shard {suite} ")) || name == format!("status {suite}") {
         return true;
